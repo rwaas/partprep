@@ -95,7 +95,7 @@ if(!val(enq("MACPATT_LOADED"))) include('ATENC_lib')
 /*	global variables							*/
 /********************************************************************************/
 $this="ate_partprep_dev-3"
-$version = "1.22.7"
+$version = "1.22.8"
 $log_file = C_DWGDIR & "\\" & UID & "_partprep_log.txt"
 /* $version_msg = "Version : " & version & " Log File : " & log_file */
 $version_msg = "Log File : " & log_file 
