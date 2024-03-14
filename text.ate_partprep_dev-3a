@@ -1713,7 +1713,7 @@ proc populate_matl_selector () {
 	
 }
 
-proc populate_matl_selector_old () \
+proc populate_matl_selector_old () \   /* this should be removed */
 	{
 	#n
 	#c
