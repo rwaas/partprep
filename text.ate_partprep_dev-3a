@@ -1,0 +1,7099 @@
+/*----------------------------------------------------------------------------
+ *                      (c) 1998 Radan Computational Ltd.
+ *
+ *                              MACRO Source file
+ *
+ * Product                              Radraft
+ * Macro source file name       
+ * Macro text file name         text.ate_partprep
+ * Encrytpion code
+ * Function key macro           no
+ * Overlay command              no
+ * Popup                        yes
+ * Include file                 no
+ * sunview / openlook
+ * Exit Macro                   no
+ * Associated icon library      none
+ * Associated gui               ate_partprep.G
+ * Associated gui icons
+ * Associated include files
+ * Associated message files
+ *
+ *
+ * Brief description            Utility to prep parts
+ *
+ *
+ *----------------------------------------------------------------------------
+ *                      Name            Date etc.
+ *
+ * Author               FPW             Coding started  04/03/2011
+ * Seconder                             Hours taken
+ * Reviewer                             Acceptance
+ *
+ *-------------------------------------------------------------------------------
+ * Notes about the source file
+ *
+ *-------------------------------------------------------------------------------
+ * New Change Log
+ *
+ * Date         Inits   Change                                  Project No.
+ *
+ * 06/05/2011	FPW	General enhancements to original code - cust requests.
+ *			Plus additional "new" function as gesture of good will.
+ * 
+ * 29/05/2011	FPW	NOTIFIED BY ACCOUNTS - CUSTOMER REFUSED TO PAY
+ *			Parts list updated to suit revised customer specification
+ *			
+ * 28/06/2011	FPW	Bug fix to remove Part creation errors due to incorrect
+ *			array data identification
+ *
+ * 31/07/2011	TRW	Added code to sort the parts list
+ *
+ * 21/09/2011	PW/TRW	Enhancement request to lock down GUI commands added
+ *			(GUI state set to 1,0 ie initial state no CAD GUI)
+ *
+ * 23/09/2011	TRW 	Enhancement request to ensure the text marking is placed
+ *						on the part. Problems were caused by tooling overhanging
+ *						the lower edges of parts
+ * 29/09/2011	TRW		Added counter (ctr) to index the part_parameters array. 
+ * 07/11/2011	TRW		Added functionality the read part numbers prefixes ect
+ *						back into the GUI. numseperator was - now . 
+ *						Added new prefixseperator .
+ *						Added code the handle (now) old numserator -
+ *						GUI ate_save_to_folder text box enabled for user input
+ * 11/10/2011	TRW		Added code to update material thickness dropdown when loaded part information
+ * 03/11/2011	TRW		Added code to identify parts that contain no data, e.g. no part number, material etc.
+ * 24/11/2011	TRW		placed next() in while statments in ate_get_part_data() and ate_update_part_data()
+ * 25/11/2011	TRW		Warning message now displayed when there is a gap in the part numbering sequence.
+ * 				TRW		Filtering added.
+ * 22/02/2014   TRW		maxnumIDpatts now equal to 10000 was 1000
+ * 15/03/2014   TRW     ate_create_parts_notifier() part looking for and found message removed 
+ * 24/03/2014	TRW		Messages added when a find() does not return a 1
+ * 16/04/2014 	TRW		Drawing scale added to tool placement when filtered
+ * 27/04/2014   TRW     The coords array in ate_create_parts_notifier was sized at 100 now 500
+ * 03/03/2018	TRW 	proc find_nested_tooling added
+ * 10/03/2018   TRW		Structure of Partlist filename changed
+ * 26/06/2020   TRW		Added procedures to turn bend up and down patterns on and off
+ * 13/07/2023   TRW		Working on new part numbers and logging
+ * 25/08/2023   TRW		Updated for Dev release
+ * 07/09/2023   TRW		Changed GUI state of form
+ * 30/11/2023	TRW		Added code for EHRT ascii files
+ * 12/01/2023	TRW		Added test for ATENC_lib been loaded
+ * 13/02/2024	TRW		restored proc esc_find_feature as esc_find_feature_old due to a new version in a shared lib requiring additional parameters 
+ *-------------------------------------------------------------------------------
+ */
+/**/
+#LOCAL_DEBUG_NONE = 0
+#LOCAL_DEBUG_SOME = 1
+#LOCAL_DEBUG_FULL = 2
+#LOCAL_DEBUG_LEVEL = 1
+
+
+if(!val(enq("MACPATT_LOADED"))) include('ATENC_lib')
+
+/********************************************************************************/
+/*	global variables							*/
+/********************************************************************************/
+$this="ate_partprep_dev-3"
+$version = "1.22.7"
+$log_file = C_DWGDIR & "\\" & UID & "_partprep_log.txt"
+/* $version_msg = "Version : " & version & " Log File : " & log_file */
+$version_msg = "Log File : " & log_file 
+
+
+
+$saved_parts_folder="" /* folder for saving copper parts */
+
+open (log_file, "w" )
+write(C_DWG)
+close()
+
+proc write_to_log(#level,$msg) {
+	if (( msg != "" ) && (level == LOCAL_DEBUG_LEVEL )) {	
+		msg = "[" & time() & "] " & msg
+		/* open (C_DWGDIR & "\\log.txt", "a" ) */
+		open (log_file, "a" )
+		write(msg)
+		close()	
+	}
+}
+
+
+
+proc won_change_machine(#id)\
+	{
+	PRS = ""
+	#mes = MES
+	MES = 0
+	
+	#ord = ORD
+	if(ord) mac("O")
+	#ncd = NCD
+	if(!ncd) mac("N")
+	
+	#res = mac2("\?],id?")
+	
+	if(!ncd) mac("N")
+	if(ord) mac("O")
+	
+	MES = mes
+	
+	rfmac("z")
+	}
+	
+	
+	
+message="RADAN_PATH : "  & PATH_RADAN 
+write_to_log(1,message)
+message="Version: " & version
+write_to_log(1,message)
+
+
+
+$command /* used for system calls */
+
+#char_type_int_min=48
+#char_type_int_max=57
+#char_type_char_lower_min=97
+#char_type_char_lower_max=122
+#char_type_char_upper_min=65
+#char_type_char_upper_max=90
+
+
+
+#max_patterns=3
+$patterns[max_patterns] 
+patterns[1] = "99.A99.A99"
+patterns[2] = "999.A99.A99"
+patterns[3] = "99.A99.A99A9A"
+
+
+func pattern_match($pattern_in) {
+	return_code=0 /* no match */
+	i = 1
+	while ( i <= max_patterns ) {
+		if ( pattern_in == patterns[i] ) {
+			return_code = 1
+			i = max_patterns
+		}
+		i = i + 1
+	}
+	return return_code	
+}
+
+
+proc to_pattern($string_in,$pattern_out) {
+	
+		message="to_pattern String In    : " & string_in
+		write_to_log(1,message) 
+	
+		$c_in
+        $string_out=""
+        #string_in_length=len(string_in)
+		
+		if ( string_in_length == 0 ) {
+			
+			write_to_log(1,"null string")
+		} else {
+		
+		
+		
+			#ascii_codes[string_in_length]
+			
+			
+			write_to_log(1,"load array") 
+			
+			ctr=1
+			while ( ctr <= string_in_length ) {
+				
+					c_in = seg(string_in,ctr,1)
+				   ascii_codes[ctr] = asc(c_in)
+			/* 	*/
+					ctr = ctr + 1
+			}
+			write_to_log(1,"array loaded")
+			ctr=1
+			while ( ctr <= string_in_length ) {
+					$c = seg(string_in,ctr,1)
+					num=asc(c)
+					if ((num >= char_type_int_min ) && (num <= char_type_int_max )) {
+							c = "9"
+					}
+					if (((num >= char_type_char_lower_min ) && (num <= char_type_char_lower_max )) || ((num >= char_type_char_upper_min ) && (num <= char_type_char_upper_max ))) {
+							c = "A"
+					}
+					string_out = string_out & c
+					ctr = ctr + 1
+			}
+		}
+        pattern_out = string_out
+/*		*/
+}
+
+proc split_string($string_in,$delimiter,#column,$result) {
+			/* write_to_log(1,"=== Delimiter ===") */
+			message="String In    : " & string_in
+			write_to_log(1,message) 
+			/* Count number of delimiters 
+			delimiter = "." */
+			delimiter_ctr = 0
+			i = 1
+			while ( i <= len(string_in)) {
+				c1 = seg(string_in,i,1)
+				if ( c1 == delimiter ) {
+					delimiter_ctr = delimiter_ctr + 1
+				}
+				/* 
+				
+				message=">" & c1
+				write_to_log(1,message)  */
+				i = i + 1
+			}
+			/*
+			log_message = "Delimiter              : " & delimiter
+			write_to_log(1,log_message)
+			
+			log_message = "Number of delimiters   : " & str(delimiter_ctr)
+			write_to_log(1,log_message)
+			*/
+			$bits_of_string[delimiter_ctr+1] /* arrary to store the delimited strings */
+			i = 1
+			
+			/* build the delimited strings in an array */
+			delimiter_ctr = 1
+			while ( i <= len(string_in)) {
+				c1 = seg(string_in,i,1)
+				
+				if ( c1 == delimiter ) {
+					delimiter_ctr = delimiter_ctr + 1
+				} else {
+					bits_of_string[delimiter_ctr] = bits_of_string[delimiter_ctr] & c1
+				}
+				
+				i = i + 1
+			}
+			
+			if ( column > (delimiter_ctr+1)) {
+				result=""				
+			} else {
+				result = bits_of_string[column] 
+			}
+			/*
+			i = 1
+			while ( i <= delimiter_ctr ) {
+				write_to_log(1,bits_of_string[i])
+				i = i + 1
+				
+			}
+			*/
+	
+	
+	
+}
+
+#max_missing_tools=10
+$ehrt_missing_tools[max_missing_tools]
+proc ehrt_add_missing_tool($tool_id) {
+	write_to_log(1,"ehrt_add_missing_tool called")
+	#i = 1
+	#found=0
+	while (( i <= max_missing_tools ) && ( found == 0 )) {
+		write_to_log(1,"check missing tool")
+		if ( ehrt_missing_tools[i] == tool_id ) {
+			i = max_missing_tools
+			found=1
+		}
+		i = i + 1
+	}
+	if ( found == 0 ) {
+		write_to_log(1,"new add to list")
+		i = 1
+		while ( i <= max_missing_tools ) {
+			if ( ehrt_missing_tools[i] == "" ) {
+				ehrt_missing_tools[i] = tool_id
+				write_to_log(1,"added")
+				i = max_missing_tools + 1
+			} else {
+				i = i + 1
+			}
+		}	
+		
+	}	
+	write_to_log(1,"ehrt_add_missing_tool finished")
+}
+
+func ehrt_get_missing_tool_count() {
+	i = 1
+	return_code = 0
+	while ( i <= max_missing_tools ) {
+		if ( ehrt_missing_tools[i] == "" ) {
+			return_code = i - 1
+			i = max_missing_tools + 1
+		} else {
+			i = i + 1
+		}
+	
+	}
+	
+	return return_code
+}
+
+func isEhrtDim($string_in) {
+	return_code=0 /* no match */
+	$delimiter = " "
+	#column=1
+	$result=""
+	
+
+	
+	split_string(string_in,delimiter,column,&result)
+	write_to_log(1,result)
+	if ( result == "\|A" ) {
+		column=3
+		split_string(string_in,delimiter,column,&result)	
+		if ( result == "C" ) {
+			return_code=1
+		}
+	}
+	
+	message="isEhrtDim: " & string_in & " Return Code : " & str(return_code)
+	write_to_log(1,message)	
+	
+	return return_code
+}
+
+
+
+$projectfolder = PATH_DAT & "\\project_data\\ate_partprep"
+$iconfolder = projectfolder & "\\gui_icons"
+
+$ate_logo_image = iconfolder & "\\ate-logo.bmp"
+
+$pps_logo_image = "PSRadan.bmp"
+
+$ate_cfg_file = projectfolder & "\\ate_partprep_cfg.xml"
+/* $ate_material_lookup_file = projectfolder & "\\partprep_material_lookup_v1.xml" */
+$ate_material_lookup_file = projectfolder & "\\partprep_material_lookup_v2.xml"
+
+
+
+$ate_description_lookup_file = projectfolder & "\\partprep_description_lookup_v1.xml"
+$ate_partslist_template_file = projectfolder & "\\ate_partslist_template.xml"
+
+$ate_partslist_browse_folder
+
+$ate_GUI_lookup_file =  "partprep_GUI_lookup" & UID
+$pathed_GUI_lookup_file = projectfolder & "\\" & ate_GUI_lookup_file
+$template_GUI_lookup_file = projectfolder & "\\partprep_GUI_lookup.template"
+
+
+
+
+
+$identified_patt = "/Identified Parts"
+$identified_text_patt = "/Identified Parts Text"
+
+#smnumber_attr = 205
+#customer_attr = 204
+
+$numseperator = "." /* TRW was "-" */
+$prefixseperator = "." /* TRW added this */
+debug_on = 0
+$text_layer_pattern = "Identified Parts Text"
+
+$nextIDstring
+#textIDhghtfactor
+#nestsymscale
+
+#charhght
+
+$IDlinetype = "f"
+#IDpen = 0
+#IDhatchspacing = 20
+#IDhatchangle = 45
+
+$qty_suffix = " OFF"
+
+#nextIDnum
+#numIDpatts
+#maxnumIDpatts = 10000 /* TRW 22-02-2014 was 1000 */
+$id_patts[maxnumIDpatts][2]
+	/* [][1] = pattern name		*/
+	/* [][2] = ID number		*/
+
+#id_pattname_field = 1
+#id_idnum_field = 2
+
+#id_patt_coords[maxnumIDpatts][5]
+	/* [][1] = blh x coord		*/
+	/* [][2] = blh y coord		*/
+	/* [][3] = trh x coord		*/
+	/* [][4] = trh y coord		*/
+	/* [][5] = IDnumber		*/
+
+#ipc_blh_xcoord = 1
+#ipc_blh_ycoord = 2
+#ipc_trh_xcoord = 3
+#ipc_trh_ycoord = 4
+#ipc_idnumber = 5
+
+$part_parameters[maxnumIDpatts][8]
+	/* [][1] = partname		*/
+	/* [][2] = material type	*/
+	/* [][3] = thickness		*/
+	/* [][4] = quantity		*/
+	/* [][5] = description		*/
+	/* [][6] = type			*/
+	/* [][7] = nest orien		*/
+	/* [][8] = IDnumber		*/
+
+#pp_name_field = 1
+#pp_matl_field = 2
+#pp_thk_field = 3
+#pp_qty_field = 4
+#pp_desc_field = 5
+#pp_type_field = 6
+#pp_orien_field = 7
+#pp_idnum_field = 8
+
+$open_profiles[maxnumIDpatts][2]
+	/* [][1] = short partname	*/
+	/* [][2] = pathed partname	*/
+
+#op_short_field = 1
+#op_pathed_field = 2
+
+#numtypes = 2
+$ate_types[numtypes]
+
+ate_types[1] = "FAB"
+ate_types[2] = "FIT"
+
+
+#nummatls
+#maxnummatls = 1200 /* 200 */  
+$material_lookups[maxnummatls][4]
+
+	/* [][1] = Material Type		*/
+	/* [][2] = Material Thicknesses		*/
+	/* [][3] = Part Marking (yes,no)	*/
+	/* [][4] = Part Category */
+	/*
+	|	STD	|	Copper	| Copper Tinned	| All	|
+	|	1	|		0	|	0			| 1		|
+	
+	
+	
+	*/
+
+#mlu_type_field = 1
+#mlu_thk_field = 2
+#mlu_mark_field = 3
+#mlu_cat_field = 4
+
+#xml_type_cell = 1
+#xml_thk_cell = 2
+#xml_mark_cell = 3
+
+#numcombomatls
+$combo_matls[maxnummatls]
+$combo_matls_text[maxnummatls]
+	/* [n] = Material Type			*/
+
+#numcombothks
+$combo_thks[50]
+	/* [n] = Material Thickness		*/
+
+#numdescrips
+#maxnumdescrips = 100
+$descrip_lookups[maxnumdescrips]
+	/* [n] = Part Description			*/
+
+
+$nestorien_symbols[7]
+
+nestorien_symbols[1] = projectfolder & "\\nestorien 1.sym"
+nestorien_symbols[2] = projectfolder & "\\nestorien 2.sym"
+nestorien_symbols[3] = projectfolder & "\\nestorien 3.sym"
+nestorien_symbols[4] = projectfolder & "\\nestorien 4.sym"
+nestorien_symbols[5] = projectfolder & "\\nestorien 5.sym"
+nestorien_symbols[6] = projectfolder & "\\nestorien 6.sym"
+nestorien_symbols[7] = projectfolder & "\\nestorien 7.sym"
+
+$commandliveimage = "notice_warning.bmp"
+
+#green = 2
+
+$gf_field_string
+
+/* TRW - Added as part of filtering option */
+$filter_file = projectfolder & "\\filter_rules.txt"
+
+#max_fields = 50
+$fields[max_fields]
+
+#max_parts_to_be_kept = 100
+#parts_to_be_kept_ctr = 0
+$parts_to_be_kept[max_parts_to_be_kept]
+	
+#max_pens_to_be_kept = 16
+#pens_to_be_kept_ctr = 0
+#pens_to_be_kept_pen = 1
+#pens_to_be_kept_linetype = 2
+#pens_to_be_kept[max_pens_to_be_kept][2]
+
+
+#max_parts_to_delete = 100
+#parts_to_delete_ctr = 0
+$parts_to_delete[max_parts_to_delete]
+
+
+/* ---------------- Global Vars for Create Parts Assistant ---------------- */
+
+$init_save_to_folder
+$ate_pathed_partslist_file
+$ate_partslist_suffix = " partslist"
+
+#ate_max_part_qty = 0
+
+#failedparts
+
+
+#numpartslistcols = 8
+$partslist_data[maxnumIDpatts][numpartslistcols]
+	/* [][1] = short symbol name	*/
+	/* [][2] = quantity		*/
+	/* [][3] = total quantity	*/
+	/* [][4] = quantity override	*/
+	/* [][5] = description		*/
+	/* [][6] = material		*/
+	/* [][7] = type			*/
+	/* [][8] = Pathed symbol name	*/
+
+#pd_shortname_field = 1
+#pd_qty_field = 2
+#pd_total_field = 3
+#pd_total_override_field = 4
+#pd_desc_field = 5
+#pd_matl_field = 6
+#pd_type_field = 7
+#pd_name_field = 8
+
+
+#marktexthght
+#marktextfont
+#marktextpen
+#markoffsetx = 10
+#markoffsety = 10
+
+#nummarkfails
+$no_marking[2000]
+	/* [n] = pathed partname	*/
+
+
+
+
+/* ----------------- Global Vars for Parts List Creation ------------------ */
+
+#partmultiplier
+
+#atepriority = 5
+
+#numprogtablecols = 7
+
+$progtableheader[7]
+progtableheader[1] = "PROGRAM NUMBER"
+progtableheader[2] = "LENGTH"
+progtableheader[3] = "WIDTH"
+progtableheader[4] = "THICKNESS"
+progtableheader[5] = "MATERIAL"
+progtableheader[6] = "RUN QTY"
+progtableheader[7] = "MACHINE"
+
+
+/* ---------------- Global Vars for Part Schedule Assistant ---------------- */
+
+$title_msg = "ATE Partslist Browser"
+$filter_msg = "Partslist files"
+$file_types = "*.xml"
+$strFilename
+
+
+/********************************************************************************/
+/*	include files								*/
+/********************************************************************************/
+
+if(!val(enq("MACFILESEL_LOADED")))\
+			include("macfilesel")
+
+#load_dialog = -1			/* Load dialog for .xml browser		*/
+
+/********************************************************************************/
+/*	Load Messages								*/
+/********************************************************************************/
+
+$msg_file = PATH_DAT & "\\msg" & str(LANG) & ".ate_partprep_dev"
+if(sys_filesize(msg_file) == -1)\
+	{
+	$error = formats("Message file %s not found", msg_file)
+	}\
+else read_mesg(msg_file, "msg_")
+
+msg_null = ""
+$msg_ok = msg_100
+$msg_yes = msg_101
+$msg_no = msg_102
+$msg_cont = msg_103
+$msg_cancel = msg_104
+$msg_overwrite = msg_105
+
+/********************************************************************************/
+/*	GUI Variables								*/
+/********************************************************************************/
+
+/* ---------------- GUI vars for Part ID Assistant ---------------- */
+$ate_prompt_field
+
+$ate_SMnumber
+$ate_PartNumberPrefix
+$ate_PartNumber
+#ate_prefix_SM_tick_box
+#ate_partnum_auto_inc_tick_box
+#ate_material_selector
+#ate_material_category_selector
+#ate_thickness_selector
+#ate_description_selector
+$ate_description 
+$ate_quantity
+
+#ate_type_selector
+#ate_material_filter_tick_box = 1
+
+#ate_material_filter_selector = 0
+
+#ate_nest_orien_selector
+
+$ate_command_live_image
+
+#ate_drg_text_height
+
+#ate_hide_boundaries_tick_box = 1
+#ate_text_layer_tick_box = 1
+
+/* ------------------------- EHRT -------------------------------------- */
+$ehrt_database_location = "\\\\ate01\\coppermc\\Shared\\Data"
+$ehrt_output_file="" /* This is the ascii file that is pushed to the ERT database */
+
+/* $ehrt_import_exe_location = "C:\\Users\\Atlas.Two\\Downloads\\EhrtDataImport_20230209_V1.1.0\\" */
+$ehrt_import_exe_location = "\\\\ATE01\\CopperMC\\Software\\EhrtDataImport_20230209_V1.1.0\\"
+
+/* Change Machine ID */
+
+
+$last_ehrt_ascii_file="" /* this is the last ascci file that as sent to the EHRT database */
+
+
+
+
+
+/* ---------------- GUI vars for Create Parts Assistant ---------------- */
+
+$ate_prompt_field2
+
+$ate_save_to_folder
+$ate_partslist_filename
+
+$ate_max_part_qty_field
+#ate_filter_features_tick_box
+#cu_filter_on = 0
+$current_selected_material /* added 17/01/24 */
+
+/* --------------- GUI vars for Schedule Parts Assistant --------------- */
+
+$ate_prompt_field3
+
+$ate_schedulepart_filename
+
+#ate_schedule_fit_tick_box
+#ate_schedule_fab_tick_box
+
+#ate_clear_schedule_tick_box
+
+$last_shell_cmd=""
+
+
+/********************************************************************************/
+/*	Load GUI								*/
+/********************************************************************************/
+
+if(!uim_loaded("ate_partprep_dev-3a")) {
+	uim_load("ate_partprep_dev-3a")
+}
+
+
+proc EhrtAccessDataImport($hretAsciiFile,$dbLocation) {
+	
+	/*
+	C:\Users\Atlas.Two\Downloads\EhrtDataImport_20230209_V1.1.0\EhrtDataImport.exe -i \\ATE01\CopperMC\OLAF discsussion\13th Test\Symbols\54129-02\EHRT\54129.02.001.asc -t access -d C:\Users\Atlas.Two\Documents\Terrys
+	*/
+	
+	command=ehrt_import_exe_location & "EHrtDataImport -i \"" & hretAsciiFile & "\" -t access -d \"" & dbLocation & "\""
+	write_to_log(LOCAL_DEBUG_SOME,"To re-run the upload use the command line below:")
+	write_to_log(LOCAL_DEBUG_SOME,command)
+	
+	rshell(command)
+	last_shell_cmd=command
+	
+}
+
+proc clear_textboxes() {
+	
+	ate_SMnumber = ""
+	ate_EnqNumber = ""
+	
+	
+	uim_show("ate_SMnumber")
+	uim_show("ate_EnqNumber")
+	
+	
+	ate_PartNumberPrefix = ""
+	ate_PartNumber = ""
+	ate_quantity = ""
+	ate_description = ""
+
+
+	uim_show("ate_PartNumberPrefix")
+	uim_show("ate_PartNumber")
+	uim_show("ate_quantity")
+	uim_show("ate_description")
+	
+}
+
+proc create_dir($dir_name) {
+	command = "if not exist \"" & dir_name & "\" mkdir \"" &  dir_name & "\""
+	write_to_log(1,command)
+	rshell(command)	
+}
+
+proc hide_gui () \
+	{
+	set_gui_state(1)
+	set_gui_substate(1,0)
+	}
+
+proc show_gui () \
+	{
+	set_gui_state(2)
+	set_gui_substate(2,6)
+	}
+
+/* 	
+	This sets the drawing attributs 
+	Fixes problems from drawings originating from atlas 
+*/ 
+proc set_attributes () {
+	
+	att_num = 205
+	$att_val = "205"
+	#return_code = att_get_dwg_attr(att_num, &att_val)
+	
+	log_message = "Attrib 205     : " & att_val
+	write_to_log(1,log_message)
+	
+	attrs = att_current_dwg()
+	att_set_value(attrs, 204, "204")
+	att_set_value(attrs, 205, "205")
+	/*
+	att_set_value(attrs, 206, "206")
+	att_set_value(attrs, 207, "207")
+	att_set_value(attrs, 208, "208")
+	att_set_value(attrs, att_num, att_val)
+	*/
+	
+}
+
+proc load_partprep_gui () \
+	{
+		
+	/* 	*/
+		write_to_log(1,"Start GUI")
+		
+	message="Material Infomation File: " & ate_material_lookup_file
+	write_to_log(1,message)
+	
+		
+	#confdoc
+
+	$init_xml_element
+	$xml_element
+
+	uim_hide("ate_createpart_popup1")
+	uim_hide("ate_schedulepart_popup1")
+
+	if(!read_cfg_file ()) return
+	if(!read_material_lookup ()) return
+	if(!read_description_lookup ()) return
+
+	uim_show("ate_partID_popup1")
+	/*   hide_gui()  TRW removed 7/9/23 */
+	set_gui_state(2)
+	set_gui_substate(2,5)
+
+	uim_set("ate_logo_panel", ate_logo_image)
+	uim_show("ate_logo_panel")
+
+	ate_prompt_field = version_msg
+	uim_show("ate_prompt_field")
+
+	/* get_SM_number_notifier (1) moved */
+	
+	populate_category_selector ()
+	
+
+	populate_matl_selector ()
+
+	populate_type_selector ()
+
+	 populate_desc_selector () /* removed 31/01/24 */
+
+	uim_show("ate_hide_boundaries_tick_box")
+	
+	uim_show("ate_material_filter_tick_box")
+	
+	
+	ate_show_boundaries_notifier ()
+	
+	
+	
+	uim_show("ate_text_layer_tick_box")
+	ate_show_text_layer_notifier ()
+
+	uim_set("ate_command_live_image", "")
+	uim_show("ate_command_live_image")
+	
+	
+	uim_show("ate_version_field") 
+	
+	
+	ate_version_field=version
+/*	uim_set("ate_version_field")*/
+	uim_show("ate_version_field")
+	
+	
+
+				/* Get default text height			*/
+	charhght = ((PSY * DRS) / textIDhghtfactor)
+	scan(identified_text_patt, "t", 0)
+	scanstop = 0
+	while(!scanstop && next()) \
+		{
+		if(LN0 == "" && MK0 > 0) \
+			{
+			charhght = FY0
+			scanstop = 1
+			}
+		}
+
+	charhght = (int(charhght * 100)) / 100
+
+	ate_drg_text_height = charhght
+	uim_show("ate_drg_text_height")
+
+
+				/* Check if user GUI lookup file exists		*/
+				write_to_log(1,"Check for User file ...")
+	sys_free_list()
+	sys_dir_list(projectfolder, ate_GUI_lookup_file)
+	if(sys_list_entry(-1) == "") \
+		{
+				/* Create new GUI lookup file for user		*/
+		confdoc = xml_open(template_GUI_lookup_file)
+		if(!confdoc) \
+			{
+			tmpstr = formats(msg_901, UID)
+			uim_notice(tmpstr, msg_ok, msg_null, 1)
+
+			return
+			}
+
+		xml_save(confdoc, pathed_GUI_lookup_file)
+		xml_close(confdoc)
+		} \
+	else \
+		{
+		write_to_log(LOCAL_DEBUG_NONE,"Read exising GUI lookup file")
+		
+				/* Read exising GUI lookup file			*/
+		confdoc = xml_open(pathed_GUI_lookup_file)
+		if(!confdoc) \
+			{
+			tmpstr = formats(msg_902, ate_GUI_lookup_file)
+			uim_notice(tmpstr, msg_ok, msg_null, 1)
+
+			uim_dismiss("ate_partID_popup1")
+
+			return
+			}
+
+				/* Retrieve GUI settings from user lookup	*/
+		init_xml_element = "/ATEPartPrep/"
+
+		xml_element = init_xml_element & "PartNumberPrefix"
+		xml_get(confdoc, xml_element, &content)
+		ate_PartNumberPrefix = content
+		uim_show("ate_PartNumberPrefix")
+		
+		log_message = "PartPrep Version     : " & version
+		write_to_log(1,log_message)
+		
+		
+		
+		log_message = "ate_PartNumberPrefix : " & ate_PartNumberPrefix
+		write_to_log(1,log_message)
+		
+		
+		log_message = "ate_SMnumber         : " & ate_SMnumber
+		write_to_log(1,log_message)
+		
+		first_char=seg(ate_SMnumber,1,1)       
+	/*	write_to_log(1,first_char) */
+		
+		if ( first_char == '-' ) {
+			
+				
+			num_chars=len(ate_SMnumber) - 1    
+			ate_SMnumber=seg(ate_SMnumber,2,num_chars)
+			log_message = "Corrected SMnumber   : " & ate_SMnumber
+			write_to_log(1,log_message)
+		}
+		
+		space_char_posn=pos(ate_SMnumber," ",1)
+		if (space_char_posn > 0 ) {
+			write_to_log(1,"SM number contains a SPACE char")
+			
+			first_part=""
+			second_part=""
+			split_string(ate_SMnumber," ",1,first_part)
+			split_string(ate_SMnumber," ",1,second_part)
+			ate_SMnumber = first_part & "-" & second_part
+			
+			
+		}
+		
+
+		xml_element = init_xml_element & "PartNumber"
+		xml_get(confdoc, xml_element, &content)
+		ate_PartNumber = content
+		
+		/* */
+		uim_show("ate_PartNumber")
+		
+		
+		/* Need to check the pattern of the partnumber. Is it an Atlas job? */
+		$pattern_out
+		to_pattern(ate_PartNumber,&pattern_out)
+		
+		log_message = "ate_PartNumber       : " & ate_PartNumber
+		write_to_log(1,log_message)
+		log_message = "Pattern              : " & pattern_out
+		write_to_log(1,log_message)
+		
+
+		if ( pattern_match(pattern_out) == 1 ) { /* was == 1 */
+		/* 
+		if (( pattern_out == patterns[1] ) || ( pattern_out == patterns[2] )  || ( pattern_out == patterns[3] )) {
+		
+		if (( pattern_out == "99.A99.A99" ) || ( pattern_out == "99.A99.A99A9" ) ) { */
+			
+			write_to_log(1,"Part Pattern Match Found")
+			
+			/* 
+			
+			ate_PartNumber   
+			
+			*/
+			
+			$delimiter="."
+			/*
+			column=1
+			$result
+			split_string(ate_PartNumber,delimiter,column,&result)
+			log_message = "Column     : " & result
+			write_to_log(1,log_message)
+			ate_EnqNumber = result
+			uim_show("ate_EnqNumber")
+			
+			*/
+			
+			/*
+			column=2
+			result=""
+			split_string(ate_PartNumber,delimiter,column,&result)	
+			ate_PartNumberPrefix = result
+			uim_show("ate_PartNumberPrefix")
+						
+			column=3
+			result=""
+			split_string(ate_PartNumber,delimiter,column,&result)
+
+			
+			ate_PartNumber = result
+			uim_show("ate_PartNumber")
+			*/
+			
+			/* Split 
+			split_char = "."
+			split_ctr = 0
+			i = 1
+			 while ( i < len(ate_PartNumber)) {
+				c1 = seg(ate_PartNumber,i,1)
+				if ( c1 == split_char ) {
+					split_ctr = split_ctr + 1
+				}
+				
+				i = i + 1
+			}
+			log_message = "Number of splits   : " & str(split_ctr)
+			write_to_log(1,log_message)
+			
+			$bits_of_string[split_ctr+1]
+			i = 1
+			
+			
+			split_ctr = 1
+			while ( i < len(ate_PartNumber)) {
+				c1 = seg(ate_PartNumber,i,1)
+				
+				if ( c1 == split_char ) {
+					split_ctr = split_ctr + 1
+				} else {
+					bits_of_string[split_ctr] = bits_of_string[split_ctr] & c1
+				}
+				
+				i = i + 1
+			}
+			i = 1
+			while ( i <= split_ctr ) {
+				write_to_log(1,bits_of_string[i])
+				i = i + 1
+			}
+			
+			enq_number = bits_of_string[1]
+			ate_EnqNumber = bits_of_string[1]
+			uim_show("ate_EnqNumber")
+			
+			ate_PartNumberPrefix = bits_of_string[2]
+			uim_show("ate_PartNumberPrefix")
+			
+			ate_PartNumber = bits_of_string[3]
+			uim_show("ate_PartNumber")
+			*/
+			/* split string test 
+			$delimiter="."
+			column=1
+			$result
+			split_string(ate_PartNumber,delimiter,column,&result)
+			log_message = "Column 1   : " & result
+			write_to_log(1,log_message)
+			
+			*/
+			
+		}
+		
+		
+
+		xml_element = init_xml_element & "SMPrefixTickbox"
+		xml_get(confdoc, xml_element, &content)
+		ate_prefix_SM_tick_box = val(content)
+		uim_show("ate_prefix_SM_tick_box")
+
+		xml_element = init_xml_element & "AutoIncPartNumber"
+		xml_get(confdoc, xml_element, &content)
+		ate_partnum_auto_inc_tick_box = val(content)
+		uim_show("ate_partnum_auto_inc_tick_box")
+
+
+		xml_element = init_xml_element & "MaterialSelector"
+		if (xml_get(confdoc, xml_element, &content) == 0 ) {
+			message=xml_element & "handle invalid"
+			write_to_log(1,message)
+		} else {
+			message=xml_element & "handle ok"
+			write_to_log(1,message)
+		}
+		ate_material_selector = val(content)
+		
+		message="raw material content : " & content
+		write_to_log(1,message)
+		
+		/* 
+		ate_material_selector = val("1") 
+		*/
+		uim_show("ate_material_selector")
+		
+		log_message = "ate_material_selector   : " & content
+		write_to_log(1,log_message)
+		
+		/*
+		write_to_log(1,"call populate_matl_thk_selector")
+		populate_matl_thk_selector ()
+		write_to_log(1,"call ended populate_matl_thk_selector")
+		*/
+
+		write_to_log(1,"1")
+
+		xml_element = init_xml_element & "ThicknessSelector"
+		xml_get(confdoc, xml_element, &content)
+		ate_thickness_selector = val(content)
+		uim_show("ate_thickness_selector")
+		log_message = "ThicknessSelector content   : " & content
+		write_to_log(1,log_message)
+
+
+
+		write_to_log(1,"2")
+
+		xml_element = init_xml_element & "Quantity"
+		xml_get(confdoc, xml_element, &content)
+		ate_quantity = content
+		/* uim_show("ate_quantity") removed 7/9/23 */
+		
+		
+		
+		write_to_log(1,"3")
+
+		xml_element = init_xml_element & "DescriptionSelector"
+		xml_get(confdoc, xml_element, &content)
+		/* ate_description_selector = val(content)
+		uim_show("ate_description_selector")  Removed 31/01/24 */
+
+		xml_element = init_xml_element & "Description"
+		xml_get(confdoc, xml_element, &content)
+		ate_description = content
+		uim_show("ate_description")
+
+		xml_element = init_xml_element & "TypeSelector"
+		xml_get(confdoc, xml_element, &content)
+		ate_type_selector = val(content)
+		uim_show("ate_type_selector")
+
+		xml_element = init_xml_element & "NestOrienSelector"
+		xml_get(confdoc, xml_element, &content)
+		ate_nest_orien_selector = val(content)
+		uim_show("ate_nest_orien_selector")
+
+
+		xml_close (confdoc)
+		}
+		
+		clear_textboxes()
+		
+		ate_PartNumberPrefix = " "
+		ate_PartNumber = " "
+		
+	
+		
+		/*
+		
+		uim_show("ate_material_selector")
+		uim_show("ate_thickness_selector")
+		
+		
+		ate_material_selector = " "
+		ate_thickness_selector = ""
+		
+		
+		ate_type_selector = " "
+		 uim_show("ate_type_selector")
+		
+		
+		
+		ate_description = " "
+		*/
+		
+		uim_show("ate_EnqNumber")
+			
+		get_SM_number_notifier (1)
+
+		ate_sm_prefix_notifier (0)
+	
+	}
+
+proc load_createpart_gui () \
+	{
+		
+	write_to_log(1,"Start Create Part GUI")	
+		
+		
+	uim_hide("ate_partID_popup1")
+	uim_hide("ate_schedulepart_popup1")
+
+	if(!read_cfg_file ()) return
+	if(!read_material_lookup ()) return
+
+	uim_show("ate_createpart_popup1")
+	hide_gui ()
+
+	ate_prompt_field2 = version_msg
+	uim_show("ate_prompt_field2")
+
+	uim_set("ate_logo_panel2", ate_logo_image)
+	uim_show("ate_logo_panel2")
+
+	ate_max_part_qty_field = str(ate_max_part_qty)
+	uim_show("ate_max_part_qty_field")
+	
+	write_to_log(1,"Started")	
+	
+	}
+
+proc load_schedulepart_gui () \
+	{
+	uim_hide("ate_partID_popup1")
+	uim_hide("ate_createpart_popup1")
+
+	if(!read_cfg_file ()) return
+
+	uim_show("ate_schedulepart_popup1")
+
+	ate_prompt_field3 = version_msg
+	uim_show("ate_prompt_field3")
+
+	uim_set("ate_logo_panel3", ate_logo_image)
+	uim_show("ate_logo_panel2")
+	}
+
+func read_cfg_file () \
+	{
+		
+	write_to_log(1,"read_cfg_file Called")		
+		
+		
+	#confdoc
+
+	$xml_element
+
+
+	confdoc = xml_open(ate_cfg_file)
+	if(!confdoc) \
+		{
+		tmpstr = formats(msg_904, ate_cfg_file)
+		uim_notice(tmpstr, msg_ok, msg_null, 1)
+
+		return (0)
+		}
+
+
+	xml_element = "/ATEPartPrep/PartIDAssistant/TextHeightFactor"
+	xml_get(confdoc, xml_element, &content)
+	textIDhghtfactor = val(content)
+
+
+
+
+	xml_element = "/ATEPartPrep/PartCreationAssistant/InitSaveToFolder"
+	xml_get(confdoc, xml_element, &content)
+	init_save_to_folder = content
+	if(UID == ".pwordsworth") init_save_to_folder = "c:\\tmp\\ATE test parts"
+	ate_save_to_folder = init_save_to_folder
+
+	xml_element = "/ATEPartPrep/PartCreationAssistant/InitMaxNumParts"
+	xml_get(confdoc, xml_element, &content)
+	ate_max_part_qty = val(content)
+
+	xml_element = "/ATEPartPrep/PartCreationAssistant/MarkTextHeight"
+	xml_get(confdoc, xml_element, &content)
+	marktexthght = val(content)
+
+	xml_element = "/ATEPartPrep/PartCreationAssistant/MarkTextFont"
+	xml_get(confdoc, xml_element, &content)
+	marktextfont = val(content)
+
+	xml_element = "/ATEPartPrep/PartCreationAssistant/MarkTextPen"
+	xml_get(confdoc, xml_element, &content)
+	marktextpen = val(content)
+
+	xml_element = "/ATEPartPrep/PartCreationAssistant/MarkOffsetX"
+	xml_get(confdoc, xml_element, &content)
+	markoffsetx = val(content)
+
+	xml_element = "/ATEPartPrep/PartCreationAssistant/MarkOffsetY"
+	xml_get(confdoc, xml_element, &content)
+	markoffsety = val(content)
+
+	xml_element = "/ATEPartPrep/PartScheduleAssistant/InitBrowseFolder"
+	xml_get(confdoc, xml_element, &content)
+	ate_partslist_browse_folder = content
+
+	if(UID == ".pwordsworth") ate_partslist_browse_folder = "c:\\tmp\\ATE test parts"
+
+
+
+	xml_close(confdoc)
+
+	return(1)
+	}
+
+func read_material_lookup () \
+	{
+		
+	write_to_log(1,"Start read_material_lookup")
+		
+	#confdoc
+	#numrows
+
+	#r
+	
+	$material_type
+
+	$xml_element
+
+
+	confdoc = xml_open(ate_material_lookup_file)
+	if(!confdoc) \
+		{
+		tmpstr = formats(msg_900, ate_material_lookup_file)
+		uim_notice(tmpstr, msg_ok, msg_null, 1)
+
+		return (0)
+		}
+
+
+	xml_element = "/Workbook/Worksheet[1]/Table"
+	numrows = xml_count_elements(confdoc, xml_element, "Row")
+	
+	message = "numrows = " & str(numrows)
+	write_to_log(0,message)
+
+	nummatls = 0 
+	
+	/* material_lookups[1][mlu_type_field] = " "
+	nummatls = 1 
+	*/
+	r = 1
+	while(r < numrows) \
+		{
+		r = r + 1
+
+		init_xml_element = "/Workbook/Worksheet[1]/Table/Row[" & str(r) & "]/Cell["
+
+		xml_element = init_xml_element & str(xml_type_cell) & "]/Data"
+		xml_get(confdoc, xml_element, &content)
+
+		if(content != "") \
+			{	
+			nummatls = nummatls + 1
+			material_lookups[nummatls][mlu_type_field] = content
+			material_type = content
+			
+			/* write_to_log(1,content) */
+
+			xml_element = init_xml_element & str(xml_thk_cell) & "]/Data"
+			xml_get(confdoc, xml_element, &content)
+			material_lookups[nummatls][mlu_thk_field] = content
+
+			xml_element = init_xml_element & str(xml_mark_cell) & "]/Data"
+			xml_get(confdoc, xml_element, &content)
+			material_lookups[nummatls][mlu_mark_field] = content
+			
+			/*
+			p = pos(material_type,"Cu",1)
+			
+			
+			if ( p == 0 ) {
+				message="1001 " & material_type
+				write_to_log(LOCAL_DEBUG_NONE,message)
+				material_lookups[nummatls][mlu_cat_field] = "1001"
+				
+			}
+			if ( p > 0 ) {
+				p = pos(material_type,"TIN",1)
+				if ( p == 0 ) {
+					material_lookups[nummatls][mlu_cat_field] = "0101"
+				}
+				if ( p > 0 ) {
+					material_lookups[nummatls][mlu_cat_field] = "0011"
+				}					
+			}
+			*/
+			
+			
+			v = val(seg(material_type,1,1))
+			
+			if ( v == 0 ) {
+				p = pos(material_type,"Cu",1)
+				if ( p == 1 ) {
+					material_lookups[nummatls][mlu_cat_field] = "1001"
+					message=material_type & " is char 1001"
+				}
+				
+			} else {
+				
+				p = pos(material_type,"Sn",1)
+				if ( p > 0 ) {
+					material_lookups[nummatls][mlu_cat_field] = "0011"
+					message=material_type & " is num and Cu TIN 0011"
+				} else {
+					material_lookups[nummatls][mlu_cat_field] = "0101"
+					message=material_type & " is num and Cu 0101"
+				}
+				
+			}
+			write_to_log(0,message)
+			
+			
+			
+			
+
+		}
+			
+			
+			
+			
+		} 
+
+	xml_close(confdoc)
+
+	return(1)
+	}
+
+func is_material_in_matl_combo ($mat) { /* note returns the last position in the dropdown */
+	message="mat=" & mat
+	write_to_log(1,message)
+	#return_code = 0 /* false */
+	/* 
+	c=1
+	while ( c < maxnummatls ) {
+		meesage=combo_matls[c]
+		write_to_log(1,message) 
+		if ( combo_matls[c] == mat ) {
+			return_code = c
+			c = maxnummatls
+		}
+		c = c + 1
+	}
+	*/
+	return return_code
+}
+
+proc populate_matl_selector () {
+	
+	write_to_log(1,"populate_matl_selector called")	
+			
+	uim_combo_del_all("ate_material_selector")
+	
+	$results[maxnummatls]
+	r=0
+	rmax=maxnummatls
+	n=0
+	uim_combo_add("ate_material_selector", "", n) 
+	z=0
+	ctr=1
+	
+	posn=0
+	last_matl=""
+	
+	while ( z < maxnummatls ) {
+		z = z + 1
+		
+		
+		cat_num = material_lookups[z][mlu_cat_field]
+		
+		
+		
+		mat=material_lookups[z][mlu_type_field]
+		message="Combo check material: " & mat & " cat:" & cat_num
+		write_to_log(0,message)	
+
+
+
+		if ( ate_material_category_selector == 1 ) {
+			if ( cat_num == "1001" ) {
+				mat=material_lookups[z][mlu_type_field]
+				if ( last_matl != mat ) {
+					message="STD: " & mat & " cat:" & cat_num
+					write_to_log(0,message)	
+					
+					uim_combo_add("ate_material_selector", mat, ctr) 
+					/* 
+										uim_combo_add("ate_material_selector", material_lookups[z][mlu_type_field], ctr) 
+					*/	
+					combo_matls[ctr] = mat 
+					
+					
+					ctr = ctr + 1
+					last_matl = mat
+				}				
+			}
+		}
+		
+		if ( ate_material_category_selector == 2 ) {
+			if ( cat_num == "0101" ) {
+				mat=material_lookups[z][mlu_type_field]
+				if ( last_matl != mat ) {
+					message="Cu: " & mat & " cat:" & cat_num
+					write_to_log(0,message)	
+					uim_combo_add("ate_material_selector", mat, ctr)
+					combo_matls[ctr] = mat 
+					ctr = ctr + 1
+					last_matl = mat
+				}				
+			}
+		}
+		
+		if ( ate_material_category_selector == 3 ) {
+			if ( cat_num == "0011" ) {
+				mat=material_lookups[z][mlu_type_field]
+				if ( last_matl != mat ) {
+					message="Cu: " & mat & " cat:" & cat_num
+					write_to_log(0,message)	
+					uim_combo_add("ate_material_selector", mat, ctr)
+					combo_matls[ctr] = mat 
+					ctr = ctr + 1
+					last_matl = mat
+				}				
+			}
+		}
+		
+		if ( ate_material_category_selector == 4 ) {
+			
+				mat=material_lookups[z][mlu_type_field]
+				if ( last_matl != mat ) {
+					message="Cu: " & mat & " cat:" & cat_num
+					write_to_log(0,message)	
+					uim_combo_add("ate_material_selector", mat, ctr)
+					combo_matls[ctr] = mat 
+					ctr = ctr + 1
+					last_matl = mat
+				}				
+			
+		}	
+		
+		/*
+		if ( ate_material_category_selector == 2 ) {
+			if ( cat_num == "0101" ) {	
+				mat=material_lookups[z][mlu_type_field]
+				message="Cu: " & mat & " cat:" & cat_num
+				write_to_log(1,message)		
+			}	
+		}
+		
+		
+		if ( ate_material_category_selector == 3 ) {
+			if ( cat_num == "0011" ) {	
+				mat=material_lookups[z][mlu_type_field]
+				message="Cu Tin : " & mat & " cat:" & cat_num
+				write_to_log(1,message)		
+			}
+		}	
+		
+		if ( ate_material_category_selector == 4 ) {
+				
+				mat=material_lookups[z][mlu_type_field]
+				message="All : " & mat & " cat:" & cat_num
+				write_to_log(1,message)		
+			
+		}		
+		*/
+			
+	/*	
+		message="Z is: " & str(z)
+		write_to_log(1,message)
+		
+		if ( mat == "" ) {
+			rmax=z
+			z = maxnummatls
+		} else { 
+			r=0
+			while ( r < rmax ) {
+				r = r + 1
+				if ( results[r] == mat ) {
+					r = rmax				
+				} 
+				if ( results[r] == "" ) {
+					message="Add " & mat & " at array posn " & str(r)
+					write_to_log(1,message)	
+					ctr = ctr + 1
+					results[r] = mat
+					r = rmax
+				} 
+				
+			}
+		}
+*/
+	
+/*			
+
+		
+		a = is_material_in_matl_combo(mat)
+		if ( a == 0 ) {
+			n = n + 1
+			message="Add " & mat
+			write_to_log(1,message)
+			uim_combo_add("ate_material_selector", mat, n)
+			
+		}
+
+	
+		z = z + 1
+		message="z=" & str(z)
+		write_to_log(0,message)	*/
+	}
+	
+	
+	
+	
+
+	
+	
+	
+/*		b = 0
+	posn=0
+	while ( b < (ctr-1) ) {
+		b = b + 1
+		if ( ate_material_category_selector == 1 ) {
+			p = pos(results[b],"Cu",1)	
+			if ( p == 0 ) {
+				message="array: " & results[b] 
+				write_to_log(1,message)
+				uim_combo_add("ate_material_selector", results[b] , posn)
+				combo_matls_text[b]	= results[b] 
+				posn = posn + 1
+			}			
+		}
+		
+		if ( ate_material_category_selector == 2 ) {
+			p = pos(results[b],"Cu",1)
+			if ( p > 0 ) {
+				p = pos(results[b],"TIN",1)
+				if ( p == 0 ) {
+					message="array: " & results[b] 
+					write_to_log(1,message)
+					uim_combo_add("ate_material_selector", results[b] , posn)		
+					combo_matls_text[b]	= results[b] 
+					posn = posn + 1
+				}
+			}		
+		}
+		if ( ate_material_category_selector == 3 ) {
+			p = pos(results[b],"TIN",1)
+			if ( p > 0 ) {
+				message="array: " & results[b] 
+				write_to_log(1,message)
+				uim_combo_add("ate_material_selector", results[b] , posn)	
+				combo_matls_text[b]	= results[b] 
+				posn = posn + 1
+			}		
+		}		
+		
+		if ( ate_material_category_selector == 4 ) {
+			
+				message="array: " & results[b] 
+				write_to_log(1,message)
+				uim_combo_add("ate_material_selector", results[b] , posn)
+				combo_matls_text[b]	= results[b] 
+				posn = posn + 1
+			
+		
+		}
+		
+	}		
+		populate_matl_thk_selector()
+
+	
+									uim_combo_add("ate_material_selector", material_lookups[n][mlu_type_field], n)
+
+							combo_matls[numcombomatls] = material_lookups[n][mlu_type_field]	
+		*/
+
+	
+	
+	
+
+	
+}
+
+proc populate_matl_selector_old () \
+	{
+	#n
+	#c
+
+	#addmatl
+
+	write_to_log(1,"populate_matl_selector called")
+
+
+	message="ate_material_category_selector=" & str(ate_material_category_selector)
+	write_to_log(1,message)
+	
+
+
+
+	uim_combo_del_all("ate_material_selector")
+	
+	uim_combo_del_all("ate_thickness_selector")
+
+	uim_combo_add("ate_material_selector", " ", 0) 
+
+
+	write_to_log(1,"start populate_matl_selector")
+
+	if ( ate_material_category_selector > 0 ) {
+
+	numcombomatls = 0
+	n = 0
+	while(n < nummatls) \
+		{
+		n = n + 1
+
+		addmatl = 1
+		c = 0
+		while(c < numcombomatls) \
+			{
+			c = c + 1
+
+			if(material_lookups[n][mlu_type_field] == combo_matls[c]) \
+				{
+				message="material already in combo_matl"
+				write_to_log(1,message)
+				c = numcombomatls
+				addmatl = 0
+				}
+			}
+
+			if(addmatl == 1) \
+			{
+				if ( 1 == 1 ) {
+					message = "ADD c=" & str (c) & " " & material_lookups[n][mlu_type_field] 
+					write_to_log(1,message)
+					
+					
+					
+					
+					/* numcombomatls = numcombomatls + 1 */
+					addmatl = 0 /* zero and reset depending on material */
+					if ( numcombomatls <= maxnummatls ) { 
+					
+						message = "numcombomatls=" & str (numcombomatls)
+						write_to_log(LOCAL_DEBUG_NONE,message)
+					
+					
+						cu_posn = pos(material_lookups[n][mlu_type_field],"Cu",1)
+						message = "cu_posn=" & str(cu_posn)
+						write_to_log(LOCAL_DEBUG_NONE,message)
+						
+					
+						if ( ate_material_category_selector == 1 ) { /* Standard Parts but not Copper*/
+							write_to_log(1,"STD Material")
+							if ( cu_posn == 0 ) {
+								message="This should not be copper: " & material_lookups[n][mlu_type_field]
+								write_to_log(LOCAL_DEBUG_NONE,message)
+								uim_combo_add("ate_material_selector", material_lookups[n][mlu_type_field], n)
+								/* addmatl = 1 */			
+							}
+						}
+						if ( ate_material_category_selector == 2 ) { /* Copper Parts */
+							write_to_log(1,"Copper Untinned")
+							if ( cu_posn >= 1 ) {
+								tin_posn = pos(material_lookups[n][mlu_type_field],"TIN",1)
+								if ( tin_posn == 0 ) { /* not tinned */
+									message="This should be copper: " & material_lookups[n][mlu_type_field]
+									write_to_log(1,message)
+									uim_combo_add("ate_material_selector", material_lookups[n][mlu_type_field], n)
+									/* addmatl = 1 */	
+								}
+							}
+						}
+						if ( ate_material_category_selector == 3 ) { /* Tinned Copper Parts */
+							if ( cu_posn >= 1 ) {
+								tin_posn = pos(material_lookups[n][mlu_type_field],"TIN",1)
+								if ( tin_posn >= 1 ) { /* is tinned */
+									write_to_log(1,message)
+									uim_combo_add("ate_material_selector", material_lookups[n][mlu_type_field], n)
+								/* addmatl = 1 */	
+								}
+							}					
+							
+						}
+						if ( ate_material_category_selector == 4 ) { /* All Parts */
+							uim_combo_add("ate_material_selector", material_lookups[n][mlu_type_field], n)						
+						}
+					
+						if ( addmatl == 99 ) {
+							numcombomatls = numcombomatls + 1
+				
+							uim_combo_add("ate_material_selector", material_lookups[n][mlu_type_field], n)
+
+							/* combo_matls[numcombomatls] = material_lookups[n][mlu_type_field]			*/
+						}
+
+					}
+				}
+				
+				
+			/*				
+					
+					if ( cu_filter_on == 1 ) {
+									
+						
+						cu_posn = pos(material_lookups[n][mlu_type_field],"Cu",1)
+						if ( cu_posn > 0 ) {
+							
+							
+							numcombomatls = numcombomatls + 1
+							
+							write_to_log(1,material_lookups[n][mlu_type_field]) 	
+							
+							uim_combo_add("ate_material_selector", material_lookups[n][mlu_type_field], n)
+
+							combo_matls[numcombomatls] = material_lookups[n][mlu_type_field]
+							
+							
+						}
+						
+						
+					} else {
+			
+						numcombomatls = numcombomatls + 1
+			
+						uim_combo_add("ate_material_selector", material_lookups[n][mlu_type_field], n)
+
+						combo_matls[numcombomatls] = material_lookups[n][mlu_type_field]
+					
+					}
+ 		 */
+				
+			}
+		}
+		write_to_log(1,"end populate_matl_selector")
+	}
+}
+
+proc old_ate_material_filter_selector_notifier () { /* this should be removed */
+	/* #ate_material_filter_selector */
+	write_to_log(1,"Material filter selector changed")
+	
+	uim_get("ate_material_filter_selector")
+	cu_filter_on = ate_material_filter_selector
+	if ( ate_material_filter_selector == 0 ) {
+		write_to_log(1,"Material filter selector changed to Zero")
+		
+	} else {
+		write_to_log(1,"Material filter selector changed to One")
+	}
+	/**/
+	
+	populate_matl_selector ()
+	
+	
+}
+
+
+proc ate_material_detail_filter_selector_notifier () {
+	
+	
+	
+	
+}
+
+
+
+proc populate_matl_thk_selector () \
+	{
+	#n
+	#c
+
+	#addthk
+	
+	
+
+	$activematl
+	
+	activematl = combo_matls[ate_material_selector]
+
+	log_message = "activematl = " & activematl
+	write_to_log(1,log_message)
+	
+	
+
+	write_to_log(1,"start populate_matl_thk_selector")
+
+	uim_get("ate_material_selector")
+	
+	write_to_log(1,"uim_get('ate_material_selector')")
+	
+	log_message = "ate_material_selector = " & str(ate_material_selector)
+	write_to_log(1,log_message)
+	
+	/*
+	message = "selected combo mtl : " & combo_matls[0]
+	write_to_log(1,message)
+	
+	message = "selected combo mtl : " & combo_matls[1]
+	write_to_log(1,message)
+	*/
+	
+	message = "selected combo mtl : " & combo_matls[ate_material_selector]	 /*results[b]combo_matls[ate_material_selector] */
+	write_to_log(1,message)
+	
+
+	
+	
+	/* if ( ate_material_selector > 0 ) { added */
+	/* if (( ate_material_selector > 0 ) || ( ate_material_category_selector > 0 ))   { updated */ 
+	
+	if (( ate_material_selector > 0 ) && ( ate_material_category_selector > 0 )) {
+	
+		activematl = combo_matls[ate_material_selector]
+
+		log_message = "activematl = " &  combo_matls[ate_material_selector]      /* activematl */
+		write_to_log(1,log_message)
+		
+		
+		
+		
+
+		uim_combo_del_all("ate_thickness_selector")
+
+		uim_combo_add("ate_thickness_selector", " ", 0) 
+
+		numcombothks = 0
+		n = 0
+		while(n < nummatls) \
+			{
+			n = n + 1			
+			
+			if(activematl == material_lookups[n][mlu_type_field]) \
+				{
+				addthk = 1
+				c = 0
+				
+				message= "Active Material = " & activematl &  " thk = " & material_lookups[n][mlu_thk_field]
+				write_to_log(1,message)
+				
+				
+				
+				
+				while(c < numcombothks) \
+					{
+					c = c + 1
+					
+					
+/*
+					message = ">" & material_lookups[n][mlu_thk_field]
+					write_to_log(1,message)
+*/
+					if(material_lookups[n][mlu_thk_field] == combo_thks[c]) \
+						{
+						c = numcombothks
+						addthk = 0
+						}
+					}
+/*			
+				log_message = "addthk = " & str(addthk)
+				write_to_log(1,log_message)
+*/
+				if(addthk) \
+					{
+					numcombothks = numcombothks + 1
+				
+					if ( cu_filter_on == 1 ) {
+						
+						
+						
+					} else {
+						
+						
+						
+					}
+				
+				
+					uim_combo_add("ate_thickness_selector", material_lookups[n][mlu_thk_field], n)
+
+					combo_thks[numcombothks] = material_lookups[n][mlu_thk_field]
+					}
+				}
+			}
+/*
+			log_message = "numcombothks = " & str(numcombothks)
+			write_to_log(1,log_message)
+*/	
+			
+		} else {
+			write_to_log(1,"selector was zero")
+		}
+	}
+
+proc populate_category_selector () {
+	n = 0
+	uim_combo_del_all("ate_material_category_selector")
+	uim_combo_add("ate_material_category_selector", " ", n); n = n + 1
+	uim_combo_add("ate_material_category_selector", "Standard Parts", n); n = n +1
+	uim_combo_add("ate_material_category_selector", "Copper Parts", n); n = n + 1
+	uim_combo_add("ate_material_category_selector", "Copper Parts (Tinned)", n); n = n + 1
+	uim_combo_add("ate_material_category_selector", "All Parts", n); n = n + 1
+}
+
+proc populate_type_selector () \
+	{
+	#n
+
+	uim_combo_del_all("ate_type_selector")
+
+	uim_combo_add("ate_type_selector", " ", 0)
+
+	n = 0
+	while(n < numtypes) \
+		{
+		n = n + 1
+
+		uim_combo_add("ate_type_selector", ate_types[n], n)
+		}
+	}
+func read_description_lookup () \
+	{
+	#confdoc
+	#numrows
+
+	#r
+
+	$xml_element
+
+
+	confdoc = xml_open(ate_description_lookup_file)
+	if(!confdoc) \
+		{
+		tmpstr = formats(msg_905, ate_description_lookup_file)
+		uim_notice(tmpstr, msg_ok, msg_null, 1)
+
+		return (0)
+		}
+
+
+	xml_element = "/Workbook/Worksheet[1]/Table"
+	numrows = xml_count_elements(confdoc, xml_element, "Row")
+
+	numdescrips = 0
+	
+	
+	
+	
+	
+	r = 1
+	while(r < numrows) \
+		{
+		r = r + 1
+
+		init_xml_element = "/Workbook/Worksheet[1]/Table/Row[" & str(r) & "]/Cell["
+
+		xml_element = init_xml_element & str(xml_type_cell) & "]/Data"
+		xml_get(confdoc, xml_element, &content)
+
+		if(content != "") \
+			{
+			numdescrips = numdescrips + 1
+			if(numdescrips > maxnumdescrips) \
+				{
+				tmpstr = formats(msg_906, str(maxnumdescrips))
+				uim_notice(tmpstr, msg_ok, msg_null, 1)
+				return(0)
+				}
+
+			descrip_lookups[numdescrips] = content
+			}
+		}
+
+	xml_close(confdoc)
+
+	return(1)
+	}
+
+proc populate_desc_selector () \
+	{
+	#n
+	#c
+
+	#addmatl
+
+	write_to_log(LOCAL_DEBUG_SOME,"populate_desc_selector called")
+
+	uim_combo_del_all("ate_description_selector")
+
+
+
+	uim_combo_add("ate_description_selector", " ", 0)
+
+	/* uim_combo_add("ate_description_selector", "Custom", 1) */
+	
+	
+
+	n = 0
+	while(n < numdescrips) \
+		{
+		n = n + 1
+
+		uim_combo_add("ate_description_selector", descrip_lookups[n], n)
+		}
+	}
+	/* 
+	ate_description_selector=0
+	uim_show("ate_description_selector")
+	*/
+	
+
+proc ate_description_selector_notifier () \
+	{
+		
+	write_to_log(1,"ate_description_selector_notifier called")
+	
+		
+	uim_get("ate_description_selector")
+
+	ate_description = ""
+	if(ate_description_selector > 0) \
+		ate_description = descrip_lookups[ate_description_selector]
+
+	uim_show("ate_description")
+	}
+
+/********************************************************************************/
+/*	GUI procedures								*/
+/********************************************************************************/
+/* Invoked from the SET button */
+proc get_SM_number_notifier (#silentmode) \
+	{
+	write_to_log(1,"get_SM_number_notifier Called")
+		
+	$tmpstr
+	$result
+	$EnqNumber
+
+	att_get_dwg_attr(smnumber_attr, &value)
+	
+	$pattern_out
+	to_pattern(value,&pattern_out)
+	
+	log_message = "SM Number : " & value & " Pattern : " & pattern_out
+	write_to_log(1,log_message)
+	
+
+	ate_SMnumber = pattern_out /* value */
+	if ( pattern_out == "AA99999-99" ) {
+		/* value = "Atlas Job" */
+		
+		
+		split_string(value,"-",1,&result)
+		result=seg(result,3,7)
+		
+		split_string(value,"-",2,&EnqNumber)
+		
+		
+	}
+	if ( pattern_out == "-AA99999-99" ) {
+		/* value = "Atlas Job" */
+		log_message = "text pattern matched -AA99999-99"
+		write_to_log(1,log_message)
+		
+		
+		split_string(value,"-",2,&result)
+		result=seg(result,3,8)
+		
+		split_string(value,"-",3,&EnqNumber)
+		
+		log_message = "Result : " & result
+		write_to_log(1,log_message)
+		
+	}
+	
+	if ( pattern_out == "AA 99999-99" ) {
+		/* value = "Atlas Job" */
+		log_message = "text pattern matched AA 99999-99"
+		write_to_log(1,log_message)
+		
+		
+		split_string(value,"-",1,&result)
+		result=seg(result,4,8)
+				
+		log_message = "Result : " & result
+		write_to_log(1,log_message)
+		
+		
+		split_string(value,"-",2,&EnqNumber)
+		
+
+		
+	}	
+	
+	if ( pattern_out == "99999-99" ) {
+		/* value = "Atlas Job" */
+		log_message = "text pattern matched AA 99999-99"
+		write_to_log(1,log_message)
+		
+		
+		split_string(value,"-",1,&result)
+		result=seg(result,1,5)
+				
+		log_message = "Result : " & result
+		write_to_log(1,log_message)
+		
+		
+		split_string(value,"-",2,&EnqNumber)
+		
+
+		
+	}	
+	
+	if ( pattern_out == "99999.99" ) {
+		/* value = "Atlas Job" */
+		log_message = "text pattern matched 99999.99"
+		write_to_log(1,log_message)
+		
+		
+		split_string(value,".",1,&result)
+		result=seg(result,1,5)
+				
+		log_message = "Result : " & result
+		write_to_log(1,log_message)
+		
+		
+		split_string(value,".",2,&EnqNumber)
+		
+
+		
+	}	
+	
+	
+	
+	
+	ate_EnqNumber = EnqNumber
+	
+	ate_SMnumber = result
+	
+	
+	message="SMnumber 1 : " & ate_SMnumber
+	write_to_log(1,message)
+	
+	uim_show("ate_SMnumber")
+	uim_show("ate_EnqNumber")
+
+	if(silentmode) return
+
+	tmpstr = formats(msg_1000, str(smnumber_attr))
+	if(ate_SMnumber == "") uim_notice(tmpstr, msg_ok, msg_null, 1)
+	}
+
+proc ate_sm_prefix_notifier (#clearprefix) \
+	{
+	uim_get("ate_prefix_SM_tick_box")
+
+	if(ate_prefix_SM_tick_box) \
+		{
+		ate_PartNumberPrefix = "SM"
+		uim_show("ate_PartNumberPrefix")
+
+		uim_enable("ate_PartNumberPrefix", 0, 0)
+		} \
+	else \
+		{
+		if(clearprefix) \
+			{
+			ate_PartNumberPrefix = ""
+			uim_show("ate_PartNumberPrefix")
+			}
+
+		uim_enable("ate_PartNumberPrefix", 0, 1)
+		}
+	}
+
+proc ate_category_selector_notifier () {
+	write_to_log(1,"ate_category_selector_notifier called")
+	uim_get("ate_material_category_selector")
+	
+	message = "selected category : " & str(ate_material_category_selector)
+	write_to_log(1,message)
+	
+	uim_combo_del_all("ate_thickness_selector")
+	
+	populate_matl_selector()
+	
+	
+	
+	if ( ate_material_category_selector == 1 ) { /* Standard Parts */
+		
+	}
+	if ( ate_material_category_selector == 2 ) { /* Copper Parts */
+		
+	}
+	if ( ate_material_category_selector == 3 ) { /* Tinned Copper Parts */
+		
+	}
+	if ( ate_material_category_selector == 4 ) { /* All Parts */
+		
+	}
+	
+	
+	
+}
+
+proc ate_material_selector_notifier () \
+	{
+	write_to_log(1,"ate_material_selector_notifier called : populate_matl_thk_selector 1")
+	
+	populate_matl_thk_selector ()
+	
+	/*
+	message = "selected mtl : " &  str(ate_material_selector)  
+	write_to_log(1,message)
+	
+	
+	populate_matl_thk_selector ()
+	
+	uim_combo_add("ate_thickness_selector", "123", 0)
+	*/
+	
+	
+	}
+
+proc ate_show_text_layer_notifier () \
+	{
+	uim_get("ate_text_layer_tick_box")
+	
+	fmac('\?\p text_layer_pattern?')
+	fmac('\?v ate_text_layer_tick_box?')
+	fmac('z')
+	
+	
+	
+	}
+
+proc ate_show_boundaries_notifier () \
+	{
+	uim_get("ate_hide_boundaries_tick_box")
+	
+	
+
+	fmac('\?\p identified_patt?')
+	fmac('\?v ate_hide_boundaries_tick_box?')
+
+	fmac('z')
+	}
+
+proc ate_adj_text_height_notifier (#txtmodifier) \
+	{
+	#txthght
+	#percent
+	#fmark
+	#n
+
+	$msgstr
+
+
+
+
+				/* Calculate text height adjustment value	*/
+	percent = (10 / 100) * txtmodifier
+
+
+				/* Modify height of all text strings		*/
+	n = 0
+	scan(identified_text_patt, "t", 0)
+	while(next()) \
+		{
+		if(LN0 == "") \
+			{
+			n = n + 1
+
+			if(n == 1) \
+				{
+				txthght = (FY0 * percent) + FY0
+				txthght = (int(txthght * 100) / 100)
+
+				ate_drg_text_height = txthght
+				uim_show("ate_drg_text_height")
+				}
+
+			find()
+			rfmac('e')
+			rfmac('\?- txthght?')
+			}
+		}
+	txthght
+	}
+
+proc ate_move_text_notifier () \
+	{
+	#fmark
+	#newx
+	#newy
+
+
+
+	if(DON) mac('D')
+
+	command_running (commandliveimage)
+
+
+					/* Set prompt message			*/
+	uim_set("ate_prompt_field", msg_504)
+	if(esc_find_feature_old("s") == 27) \
+		{
+		command_running ("")
+
+		uim_set("ate_prompt_field", msg_null)
+		return
+		}
+
+	fmark = MK1
+
+	if(!fmark) \
+		{
+		command_running ("")
+
+		uim_set("ate_prompt_field", msg_null)
+		uim_notice(msg_506, msg_ok, msg_null, 1)
+		return
+		}
+	pnt(S1X,S1Y)
+	fmac('s')
+
+	uim_set("ate_prompt_field", msg_505)
+	ginval = gin(0)
+	if(ginval == 251 || ginval == 253) gin(0)
+	if(ginval == 27) \
+		{
+		command_running ("")
+
+		uim_set("ate_prompt_field", msg_null)
+		return
+		}
+
+	mac('D')
+
+	pnt(UX,UY)
+	fmac('s')
+
+	scan(identified_text_patt, "t", 0)
+	while(next()) \
+		{
+		if(MK0 == fmark && LN0 == "") \
+			{
+			find()
+			fmac('m')
+			}
+		}
+
+	scan(identified_text_patt, "s", 0)
+	while(next()) \
+		{
+		if(MK0 == fmark) \
+			{
+			find()
+			fmac('m')
+			}
+		}
+
+	mac('D')
+
+	command_running ("")
+
+	uim_set("ate_prompt_field", msg_null)
+	}
+
+func ate_identify_selected_part () \
+	{
+	#key
+	#ux1;#uy1
+	#ux2;#uy2
+
+	#p
+	#msgval
+
+		write_to_log(1,"ate_identify_selected_part called")
+		
+		
+					/* Purge pattern array			*/
+	p = 0
+	while(p < maxnumIDpatts) \
+		{
+		p = p + 1
+		id_patts[p][1] = ""
+		id_patts[p][2] = ""
+		}
+
+					/* Create / Open identification pattern	*/
+	open_pattern (identified_patt)
+
+	collect_ID_Part_data ()
+
+
+					/* Force boundary visibility "ON"	*/
+	ate_hide_boundaries_tick_box = 1
+	uim_show("ate_hide_boundaries_tick_box")
+	ate_show_boundaries_notifier ()
+	
+	ate_text_layer_tick_box = 1
+	uim_show("ate_text_layer_tick_box")
+	ate_show_text_layer_notifier ()
+
+	
+
+
+	command_running (commandliveimage)
+
+					/* Update prompt			*/
+	uim_set("ate_prompt_field", msg_500)
+
+					/* get point location or window coords	*/
+	key = gin(2)
+	if(key == 27) \
+		{
+		command_running ("")
+
+		uim_set("ate_prompt_field", msg_null)
+		return (0)
+		}
+
+	ux1 = UX;uy1 = UY
+
+
+
+
+
+	if(key == 251)\
+		{
+					/* middle mouse press window zoom	*/
+		mac('w')
+
+		if(gin(1) == 27) \
+			{
+			command_running ("")
+
+			uim_set("ate_prompt_field", msg_null)
+			return (0)
+			}
+
+		if(!mac('z')) mac('r')
+
+					/* call function recursively		*/
+		return(ate_identify_selected_part ())
+		}\
+	else if(key == 253)\
+		{
+		if(gin(1) == 27) \
+			{
+			command_running ("")
+
+			uim_set("ate_prompt_field", msg_null)
+			return (0)
+			}
+
+		ux2 = UX;uy2 = UY
+
+					/* Validate all user input data		*/
+		msgval = validate_part_data ()
+		if(msgval > 1) \
+			{
+			command = "uim_notice(msg_" & str(msgval) & ",msg_ok, msg_null,1)"
+			exec(command)
+
+			command_running ("")
+
+					/* Update prompt			*/
+			uim_set("ate_prompt_field", msg_null)
+
+			return(0)
+			}
+
+
+		write_to_log(1,"check_update_part_ID called")
+		check_update_part_ID (ux1, uy1, ux2, uy2)
+		}
+
+	command_running ("")
+
+	uim_set("ate_prompt_field", msg_null)
+	write_to_log(1,"a======================")
+	return(1)
+	}
+proc collect_ID_Part_data () \
+	{
+	
+	write_to_log(1,"collect_ID_Part_data called")
+	
+	#tmpval
+
+
+					/* Scan / log current ID'd parts	*/
+	nextIDnum = 0
+	numIDpatts = 0
+	scan(identified_patt, "ip", 0)
+	
+	/* debug(identified_patt) */
+	next()
+	
+	while(next()) \
+		{
+		numIDpatts = numIDpatts + 1
+
+		if(numIDpatts > maxnumIDpatts) \
+			{
+			tmpstr = formats(msg_1001, str(maxnumIDpatts))
+			uim_notice(tmpstr, msg_ok, msg_null, 1)
+
+			return(0)
+			}
+
+		id_patts[numIDpatts][id_pattname_field] = PA0
+		
+		
+		
+		tmpval = val(PA0)
+		id_patts[numIDpatts][id_idnum_field] = str(tmpval)
+
+		
+		
+		
+		#minx;#miny;#maxx;#maxy
+		pattern_bounds(PA0, "l", &minx, &miny, &maxx, &maxy)
+
+		id_patt_coords[numIDpatts][ipc_blh_xcoord] = minx
+		id_patt_coords[numIDpatts][ipc_blh_ycoord] = miny
+		id_patt_coords[numIDpatts][ipc_trh_xcoord] = maxx
+		id_patt_coords[numIDpatts][ipc_trh_ycoord] = maxy
+
+		id_patt_coords[numIDpatts][ipc_idnumber] = val(PA0)
+
+		if(val(PA0) > nextIDnum) nextIDnum = val(PA0)
+		}
+
+	nextIDnum = nextIDnum + 1
+ 	}
+
+func validate_part_data () \
+	{
+		
+	write_to_log(1,"validate_part_data called")	
+		
+		
+	uim_get("ate_PartNumberPrefix")
+	if(ate_PartNumberPrefix == "") return(2000)
+
+	uim_get("ate_SMnumber")
+	if(ate_SMnumber == "") return(2001)
+
+	uim_get("ate_PartNumber")
+	if(ate_PartNumber == "") return(2002)
+
+
+
+	uim_get("ate_material_selector")
+	if(ate_material_selector == 0) return(2003)
+
+
+	write_to_log(1,"ate_thickness_selector called")	
+	uim_get("ate_thickness_selector")
+	if(ate_thickness_selector == 0) return(2004)
+
+	write_to_log(1,"ate_quantity called")	
+	uim_get("ate_quantity")
+	if(val(ate_quantity) <= 0) return(2005)
+
+
+	uim_get("ate_description")
+	if(ate_description == "") return(2006)
+
+	uim_get("ate_type_selector")
+	if(ate_type_selector == 0) return(2007)
+
+	uim_get("ate_nest_orien_selector")
+
+	write_to_log(1,"=================")
+	
+	return (1)
+	}
+
+func check_update_part_ID (#ux1, #uy1, #ux2, #uy2) \
+	{
+	$tmpstr
+	$nextIDpatt
+
+	#tmpval
+	#strleng
+	#p
+
+	#blx
+	#bly
+
+	#textx
+	#texty
+
+	#xcheck
+	#ycheck
+
+	#nestscale
+
+	#fmark
+
+	write_to_log(1,"check_update_part_ID")
+
+					/* Check size of defined boundary	*/
+	xcheck = ux2 - ux1
+	if(ux2 < ux1) xcheck = ux1 - ux2
+	ycheck = uy2 - uy1
+	if(uy2 < uy1) ycheck = uy1 - uy2
+
+	if(xcheck < 10 && ycheck < 10) \
+		{
+		uim_notice(msg_1002, msg_ok, msg_null, 1)
+
+		return (0)
+		}
+					/* Create new ID pattern		*/
+					
+	write_to_log(1,"Create new ID pattern")
+	p = 1
+	nextIDpatt = identified_patt & "/partID " & str(nextIDnum)
+	fmac('\?\p nextIDpatt, "y"?')
+
+	fmark = nextIDnum
+
+	numIDpatts = numIDpatts + 1
+	id_patts[numIDpatts][id_pattname_field] = nextIDpatt
+	id_patts[numIDpatts][id_idnum_field] = str(nextIDnum)
+
+
+	pnt(ux1,uy1)
+	fmac('s')
+
+	pnt(ux2,uy2)
+	if(!fmac('"')) \
+		{
+					/* Report failure to define boundary	*/
+		uim_notice(msg_1002, msg_ok, msg_null, 1)
+
+					/* Delete redundant ID pattern		*/
+		fmac('\?\p nextIDpatt?')
+		fmac('x')
+
+		return (0)
+		}
+
+					/* Edit boundary linetype & pen		*/
+	p = 1
+	while(scan(nextIDpatt, "l", p)) \
+		{
+		find()
+
+		edit_feature_props (IDlinetype, IDpen)
+
+		p = p + 1
+		}
+
+	MES = 0
+
+					/* Add hatching to boundary		*/
+	fmac('\?\p nextIDpatt?')
+	fmac('\?h IDhatchspacing, IDhatchangle, 0?')
+	fmac('e')
+	fmac('\?P IDpen?')
+
+
+					/* Add text ID string to BLH corner	*/
+	open_pattern(identified_text_patt)
+
+	write_to_log(1,"get_part_ID_string called")
+	get_part_ID_string ()
+	write_to_log(1,"get_part_ID_string done")
+					/* Set character height			*/
+	uim_get("ate_drg_text_height")
+	charhght = ate_drg_text_height
+	if(charhght == 0) \
+		{
+		charhght = ((PSY * DRS) / textIDhghtfactor)
+		charhght = (int(charhght * 100)) / 100
+
+		ate_drg_text_height = charhght
+		uim_show("ate_drg_text_height")
+		}
+		
+
+	nestsymscale = 1
+	if(PSX * DRS < 595) nestsymscale = 1.5
+	if(PSX * DRS < 421) nestsymscale = 2
+	if(PSX * DRS < 298) nestsymscale = 3
+
+
+					/* Prompt to position text		*/
+	uim_set("ate_prompt_field", msg_501)
+	gin(0)
+	textx = UX;texty = UY
+
+
+	fmac('\?T nextIDstring?')
+	pnt(textx,texty)
+	fmac(' ')
+	fmac('\?\' fmark?')
+	fmac('e')
+	fmac('\?- charhght?')
+	fmac('\!')
+
+					/* Add nest orien symbol		*/
+	tmpstr = nestorien_symbols[ate_nest_orien_selector + 1]
+
+	fmac('\?0 tmpstr, nestsymscale, 0?')
+	pnt(textx,texty)
+	fmac(' ')
+	fmac('\?\' fmark?')
+	fmac('\!')
+
+	MES = 1
+
+					/* Check auto inc drawing number	*/
+	uim_get("ate_partnum_auto_inc_tick_box")
+	if(ate_partnum_auto_inc_tick_box) \
+		{
+		uim_get("ate_PartNumber")
+
+		strleng = 0
+		if(seg(ate_PartNumber, 1, 1) == "0") strleng = len(ate_PartNumber)
+
+		tmpval = val(ate_PartNumber) + 1
+		ate_PartNumber = str(tmpval)
+
+					/* check for preceeding zeros		*/
+		while(len(ate_PartNumber) < strleng) ate_PartNumber = "0" & ate_PartNumber
+
+		uim_show("ate_PartNumber")
+		}
+
+	return (1)
+	}
+
+proc get_part_ID_string () \
+	{
+	message="get_part_ID_string - ate_PartNumberPrefix : " & ate_PartNumberPrefix
+	write_to_log(1,message)
+	
+	message = "ate_thickness_selector : " & str(ate_thickness_selector)
+	write_to_log(1,message)
+	
+	if ( ate_PartNumberPrefix == "SM" ) {
+		/* debug("SM Code") */
+		write_to_log(1,"SM Code")
+		nextIDstring = "\\j" & ate_PartNumberPrefix & ate_SMnumber & numseperator & ate_PartNumber & \
+			"\\j" & combo_thks[ate_thickness_selector] & ", " & combo_matls[ate_material_selector] & \
+			"\\j" & ate_quantity & qty_suffix &\
+			"\\j" & ate_description & \
+			"\\j" & ate_types[ate_type_selector]
+		
+		
+		
+	} else { 
+	write_to_log(1,"Not a SM Code")
+	message = "ate_thickness_selector : " & str(ate_thickness_selector)
+	write_to_log(1,message) 
+	uim_get("ate_EnqNumber") 
+	nextIDstring = "\\j" & ate_SMnumber & "-" & ate_EnqNumber  & prefixseperator & ate_PartNumberPrefix  & numseperator & ate_PartNumber & \
+			"\\j" & combo_thks[ate_thickness_selector] & ", " & combo_matls[ate_material_selector] & \
+			"\\j" & ate_quantity & qty_suffix &\
+			"\\j" & ate_description & \
+			"\\j" & ate_types[ate_type_selector]
+	}
+	write_to_log(1,nextIDstring) 
+	
+	/* TRW 
+	nextIDstring = "\\j" & ate_PartNumberPrefix & ate_SMnumber & numseperator & ate_PartNumber & \
+			"\\j" & combo_thks[ate_thickness_selector] & ", " & combo_matls[ate_material_selector] & \
+			"\\j" & ate_quantity & qty_suffix &\
+			"\\j" & ate_description & \
+			"\\j" & ate_types[ate_type_selector]
+		*/
+	}
+
+proc ate_update_part_data () \
+	{
+	#validated
+	#fmark
+	#scanstop
+	#msgval
+
+	#labelx
+	#labely
+
+	#ux1
+	#uy1
+
+	$tmpstr
+	$cop
+
+
+
+
+	cop = COP
+
+					/* Force boundary visibility "ON"	*/
+	ate_hide_boundaries_tick_box = 1
+	uim_show("ate_hide_boundaries_tick_box")
+	ate_show_boundaries_notifier ()
+
+					/* Update prompt			*/
+	uim_set("ate_prompt_field", msg_507)
+
+
+	command_running (commandliveimage)
+
+
+					/* Validate all user input data		*/
+	msgval = validate_part_data ()
+	if(msgval > 1) \
+		{
+		command = "uim_notice(msg_" & str(msgval) & ",msg_ok, msg_null,1)"
+		exec(command)
+
+		command_running ("")
+
+					/* Update prompt			*/
+		uim_set("ate_prompt_field", msg_null)
+
+		return
+		}
+
+
+		/* Compose new part data string			*/
+	get_part_ID_string ()
+
+
+					/* Get point location			*/
+	if(gin(0) == 27) \
+		{
+		command_running ("")
+
+		uim_set("ate_prompt_field", msg_null)
+
+		return
+		}
+
+	ux1 = UX;uy1 = UY
+
+
+
+
+		/* Delete existing part data			*/
+	validated = 0
+	p = 0
+	while(p < numIDpatts) \
+		{
+		p = p + 1
+
+		if(ux1 > id_patt_coords[p][ipc_blh_xcoord] && ux1 < id_patt_coords[p][ipc_trh_xcoord] && \
+			uy1 > id_patt_coords[p][ipc_blh_ycoord] && uy1 < id_patt_coords[p][ipc_trh_ycoord]) \
+			{
+			tmpstr = id_patts[p][id_pattname_field]
+
+			fmark = val(tmpstr)
+
+
+					/* Reset hatch colour				*/
+			fmac('H')
+			fmac('e')
+			fmac('\?P IDpen?')
+
+
+
+					/* Delete part text label			*/
+			scanstop = 0
+			scan(identified_text_patt, "t", 0)
+			while(!scanstop) \
+				{
+				next()
+
+				if(MK0 == fmark && LN0 == "") \
+					{
+					find()
+
+					labelx = S0X
+					labely = S0Y
+
+					rfmac('x')
+
+					scanstop = 1
+					}
+				}
+
+					/* Delete part nest orien label			*/
+			scanstop = 0
+			scan(identified_text_patt, "s", 0)
+			while(next() && !scanstop) \
+				{
+				/* next() TRW - placed in while loop */
+
+				if(MK0 == fmark) \
+					{
+					find()
+					rfmac('x')
+
+					scanstop = 1
+					}
+				}
+
+			validated = 1
+
+			p = numIDpatts
+			}
+		}
+
+
+
+
+
+
+	MES = 0
+
+		/* Open text pattern				*/
+	fmac('\?\p identified_text_patt?')
+	fmac('o')
+
+		/* Add new text string				*/
+	fmac('\?T nextIDstring?')
+	pnt(labelx,labely)
+	fmac(' ')
+	fmac('\?\' fmark?')
+	fmac('e')
+	fmac('\?- charhght?')
+	fmac('\!')
+
+		/* Add nest orien symbol			*/
+	nestsymscale = 1
+	if(PSX * DRS < 595) nestsymscale = 1.5
+	if(PSX * DRS < 421) nestsymscale = 2
+	if(PSX * DRS < 298) nestsymscale = 3
+
+
+	tmpstr = nestorien_symbols[ate_nest_orien_selector + 1]
+
+	fmac('\?0 tmpstr, nestsymscale, 0?')
+	pnt(labelx,labely)
+	fmac(' ')
+	fmac('\?\' fmark?')
+	fmac('\!')
+
+		/* Reset open pattern				*/
+	fmac('\?\p cop?')
+	fmac('o')
+	MES = 1
+
+
+	command_running ("")
+
+	uim_set("ate_prompt_field", msg_null)
+
+	if(!validated) uim_notice(msg_1003, msg_ok, msg_null, 1)
+	}
+
+proc ate_delete_selected_part () \
+	{
+	#validated
+	#fmark
+	#scanstop
+
+	#ux1
+	#uy1
+
+	#p
+
+	$tmpstr
+
+					/* Force boundary visibility "ON"	*/
+	ate_hide_boundaries_tick_box = 1
+	uim_show("ate_hide_boundaries_tick_box")
+	ate_show_boundaries_notifier ()
+
+					/* Update prompt			*/
+	uim_set("ate_prompt_field", msg_502)
+
+	command_running (commandliveimage)
+
+					/* Get point location			*/
+	if(gin(0) == 27) \
+		{
+		command_running ("")
+
+		uim_set("ate_prompt_field", msg_null)
+
+		return
+		}
+
+	ux1 = UX;uy1 = UY
+
+	collect_ID_Part_data ()
+
+	validated = 0
+	p = 0
+	while(p < numIDpatts) \
+		{
+		p = p + 1
+
+		if(ux1 > id_patt_coords[p][ipc_blh_xcoord] && ux1 < id_patt_coords[p][ipc_trh_xcoord] && \
+			uy1 > id_patt_coords[p][ipc_blh_ycoord] && uy1 < id_patt_coords[p][ipc_trh_ycoord]) \
+			{
+			tmpstr = id_patts[p][id_pattname_field]
+			fmac('\?\p tmpstr?')
+			fmac('\?x "y"?')
+			fmac('z')
+
+			fmark = val(tmpstr)
+
+					/* Delete part text label			*/
+			scanstop = 0
+			scan(identified_text_patt, "t", 0)
+			while(!scanstop) \
+				{
+				next()
+
+				if(MK0 == fmark && LN0 == "") \
+					{
+					find()
+					rfmac('x')
+
+					scanstop = 1
+					}
+				}
+
+					/* Delete part nest orien label			*/
+			scanstop = 0
+			scan(identified_text_patt, "s", 0)
+			while(!scanstop) \
+				{
+				next()
+
+				if(MK0 == fmark) \
+					{
+					find()
+					rfmac('x')
+
+					scanstop = 1
+					}
+				}
+
+			validated = 1
+
+			p = numIDpatts
+			}
+		}
+
+	command_running ("")
+
+	uim_set("ate_prompt_field", msg_null)
+
+	if(!validated) uim_notice(msg_1003, msg_ok, msg_null, 1)
+	}
+
+/* THIS A TEST FUNCTION */
+proc ate_get_part_data () {
+	
+	#validated
+	#ux1
+	#uy1
+	#p
+	#m
+	#d
+	#tmpval
+	#fmark
+	#scanstop
+	$tmpstr	
+	$message /* TRW 09/02/19 */
+
+	/* write_to_log(1,"called proc ate_get_part_data ()") */
+
+
+					/* Force boundary visibility "ON"	*/
+	ate_hide_boundaries_tick_box = 1
+	uim_show("ate_hide_boundaries_tick_box")
+	ate_show_boundaries_notifier ()
+
+					/* Update prompt			*/
+	uim_set("ate_prompt_field", msg_503)
+
+	command_running (commandliveimage)
+
+					/* Get point location			*/
+	if(gin(0) == 27) \
+		{
+		command_running ("")
+
+		uim_set("ate_prompt_field", msg_null)
+		return
+		}
+
+	ux1 = UX;uy1 = UY
+	
+	collect_ID_Part_data ()
+	
+	validated = 0
+	p = 0
+	while(p < numIDpatts) \
+		{
+		p = p + 1
+		/* uim_notice(str(p), msg_ok, msg_null, 1) */
+		if(ux1 > id_patt_coords[p][ipc_blh_xcoord] && ux1 < id_patt_coords[p][ipc_trh_xcoord] && \
+			uy1 > id_patt_coords[p][ipc_blh_ycoord] && uy1 < id_patt_coords[p][ipc_trh_ycoord]) \
+			{
+			tmpstr = id_patts[p][id_pattname_field]
+			fmark = val(tmpstr)
+/*
+			message = "fmark : " & fmark & "  tmpstr : " & tmpstr
+			uim_notice(message, msg_ok, msg_null, 1)
+			
+*/		
+			
+			validated = 1
+
+			
+			
+			
+					/* Scan for part data text string		*/
+			scanstop = 0
+			scan(identified_text_patt, "t", 0)
+			
+			
+			while(!scanstop) \
+				{
+				
+				next() 
+
+				if(LN0 == "" && MK0 == fmark) \
+					{
+					scanstop = 1
+							/* Get SM Number prefix				*/
+							/* Get 2nd field delimited by \			*/
+					get_field(2, "\\", FT0)
+							/* Get 1st field delimited by -			*/
+					get_field(1, "-", gf_field_string)
+
+					tstring = "FTO=" & FT0 & "gf_field_string=" & gf_field_string
+					/* debug(tstring) */
+					message="tstring = " & tstring
+					write_to_log(1,message)
+					
+					/* Clear text boxes */
+					ate_PartNumberPrefix=""
+					uim_show("ate_PartNumberPrefix")
+					ate_EnqNumber=""
+					uim_show("ate_EnqNumber")		
+					ate_PartNumber=""
+					uim_show("ate_PartNumber")
+					
+					
+					
+					
+							/* Determine number and length of num string	*/
+					tmpval = val(gf_field_string)
+					tmpstr = str(tmpval)
+
+					
+					
+
+					/* Extract Prefix				*/
+					tstring = seg(gf_field_string, 2, -len(gf_field_string) + len(tmpstr))
+					/* debug(tstring) */
+					ate_PartNumberPrefix = seg(gf_field_string, 2, -len(gf_field_string) + len(tmpstr))
+					
+					
+					uim_show("ate_PartNumberPrefix")
+
+					message="ate_PartNumberPrefix = " & tstring
+					write_to_log(1,message)	
+
+
+							/* Get Part Number				*/
+							/* Get 2nd field delimited by \			*/
+					get_field(2, "\\", FT0)
+					part_data_string = gf_field_string
+					
+					message="part_data_string : " & part_data_string
+					write_to_log(1,message)	
+					
+					
+					
+							/* Get 2nd field delimited by -			*/
+					/* test for old seperator */
+					if (pos(gf_field_string, "-", 0)) {
+						
+						get_field(2, "-", part_data_string)
+						ate_PartNumber = gf_field_string
+						
+						get_field(1, "-", part_data_string)
+						tmpval = val(gf_field_string)
+						ate_SMnumber = str(tmpval)
+						
+						
+						
+					} else {
+						
+						
+						get_field(1, ".", part_data_string)
+						gf_field_string = seg(gf_field_string,2,len(gf_field_string)-1)
+						ate_SMnumber = gf_field_string
+						
+						if ( ate_PartNumberPrefix == "SM" ) {
+							/* debug("SM") */
+							get_field(2, ".", part_data_string)
+							ate_PartNumber = gf_field_string
+							
+							tmpval = val(ate_SMnumber)
+							ate_SMnumber = str(tmpval)
+							
+						
+						} else {
+							
+						/*
+							get_field(2, ".", part_data_string)
+							uim_show("ate_PartNumberPrefix") = gf_field_string
+						
+							get_field(3, ".", part_data_string)
+							ate_PartNumber = gf_field_string
+						*/
+						
+						}
+						
+						
+						
+					}
+					
+					result=""
+					split_string(FT0,"\\",2,&result)
+					result = seg(result,2,len(result)-1)
+					log_message = "Field 1 : " & result
+					write_to_log(1,log_message)
+						ate_PartNumber=""
+						split_string(result,".",3,&ate_PartNumber)
+						log_message = "Field 3 ate_PartNumber : " & ate_PartNumber
+						write_to_log(1,log_message)
+						
+						Section=""
+						split_string(result,".",2,&Section)
+						log_message = "Field 2 Section        : " & Section
+						write_to_log(1,log_message)
+						
+						SMandEnq=""
+						split_string(result,".",1,&SMandEnq)
+						log_message = "Field 1 SMandEnq       : " & SMandEnq
+						write_to_log(1,log_message)
+						
+						ate_SMnumber=""
+						ate_EnqNumber=""
+						
+						sep_posn = pos(SMandEnq,"-",1)
+						if ( sep_posn > 0 ) {							
+							split_string(SMandEnq,"-",1,&ate_SMnumber)
+							log_message = "Field 1 ate_SMnumber   : " & ate_SMnumber
+							write_to_log(1,log_message)
+							
+							split_string(SMandEnq,"-",2,&ate_EnqNumber)
+							log_message = "Field 1 ate_EnqNumber  : " & ate_EnqNumber
+							write_to_log(1,log_message)							
+						}
+						sep_posn = pos(SMandEnq," ",1)
+						if ( sep_posn > 0 ) {							
+							split_string(SMandEnq," ",1,&ate_SMnumber)
+							log_message = "Field 1 ate_SMnumber   : " & ate_SMnumber
+							write_to_log(1,log_message)
+							
+							split_string(SMandEnq," ",2,&ate_EnqNumber)
+							log_message = "Field 1 ate_EnqNumber  : " & ate_EnqNumber
+							write_to_log(1,log_message)							
+						}
+						
+						sep_posn = pos(SMandEnq,".",1)
+						if ( sep_posn > 0 ) {							
+							split_string(SMandEnq,".",1,&ate_SMnumber)
+							log_message = "Field 1 ate_SMnumber   : " & ate_SMnumber
+							write_to_log(1,log_message)
+							
+							split_string(SMandEnq,".",2,&ate_EnqNumber)
+							log_message = "Field 1 ate_EnqNumber  : " & ate_EnqNumber
+							write_to_log(1,log_message)							
+						}
+						
+						/* if part numnber is missing */
+						
+						if ( ate_SMnumber == "" ) {
+							$tmp_attrib_data=""
+							att_get_dwg_attr(smnumber_attr, &tmp_attrib_data)
+							split_string(tmp_attrib_data,".",1,&ate_SMnumber)
+							split_string(tmp_attrib_data,".",2,&ate_EnqNumber)
+							
+							
+						}
+						
+						
+						
+					ate_PartNumberPrefix=Section	
+						
+					message="SMnumber 2 : " & ate_SMnumber
+					write_to_log(1,message)					
+						
+						
+					uim_show("ate_SMnumber")	
+					uim_show("ate_EnqNumber")	
+					uim_show("Section")
+					uim_show("ate_PartNumberPrefix")
+					
+					
+					result=""
+					split_string(FT0,"\\",3,&result)
+					result = seg(result,2,len(result)-1)
+					log_message = "Field 2 : " & result
+					write_to_log(1,log_message)
+					
+					mtl_thickness = ""
+					split_string(result,",",1,&mtl_thickness)
+					
+					message="Mtl Thickness: " & mtl_thickness
+					write_to_log(1,message)
+					
+					
+					result=""
+					qty=""
+					split_string(FT0,"\\",4,&result)
+					result = seg(result,2,len(result)-1)
+					log_message = "Field 3 : " & result
+					split_string(result," ",1,&qty)
+					
+					write_to_log(1,log_message)
+					
+					result=""
+					split_string(FT0,"\\",5,&result)
+					result = seg(result,2,len(result)-1)
+					log_message = "Field 4 : " & result
+					write_to_log(1,log_message)
+					$desc = result
+					
+					
+					
+					
+					result=""
+					split_string(FT0,"\\",6,&result)
+					result = seg(result,2,len(result)-1)
+					log_message = "Field 5 : " & result
+					write_to_log(1,log_message)
+					$assy_type = result
+					
+								/* Get Description				*/
+							/* Get 5th field delimited by \			*/
+					get_field(5, "\\", FT0)
+					ate_description = seg(gf_field_string, 2, -len(gf_field_string))
+					uim_show("ate_description")
+					
+					
+					result=""
+					split_string(FT0,"\\",6,&result)
+					log_message = "DESC? : " & result
+					write_to_log(1,log_message)
+					result = seg(result,2,len(result)-1)
+					log_message = "Field 6 : " & result
+					write_to_log(1,log_message)
+				/*	$assy_type = result
+					
+				
+					uim_show("ate_EnqNumber")
+					
+				
+					
+					
+					
+					message="ate_SMnumber = " & ate_SMnumber
+					write_to_log(1,message)
+					
+				
+					
+					
+					
+					
+					
+					write_to_log(1,"============= ate_get_part_data =================")
+					message="ate_SMnumber = " & ate_SMnumber
+					write_to_log(1,message)
+					
+					*/		
+					
+					message="ate_PartNumber = " & ate_PartNumber
+					write_to_log(1,message)	
+	
+					message="ate_PartNumberPrefix = " & ate_PartNumberPrefix
+					write_to_log(1,message)		
+							
+							
+					$pattern_out
+					to_pattern(ate_PartNumber,&pattern_out)
+		
+					log_message = "ate_PartNumber       : " & ate_PartNumber
+					write_to_log(1,log_message)
+					log_message = "Pattern              : " & pattern_out
+					write_to_log(1,log_message)
+
+
+					if( ate_PartNumberPrefix == "SM" ) {
+						ate_prefix_SM_tick_box = 1
+						uim_show("ate_prefix_SM_tick_box")
+						uim_enable("ate_PartNumberPrefix", 0, 0)
+					} else {
+						ate_prefix_SM_tick_box = 0
+						uim_show("ate_prefix_SM_tick_box")
+						uim_enable("ate_PartNumberPrefix", 0, 1)
+					}
+					
+					
+					tstring = gf_field_string & " val=" & str(tmpval) & " tmpstr=" & tmpstr & " ate_PartNumberPrefix=" & ate_PartNumberPrefix & " ate_PartNumber=" & ate_PartNumber
+					
+					
+					
+					uim_show("ate_PartNumber")
+
+					log_message = "FT0       : " & FT0
+					write_to_log(1,log_message)
+
+							/* Get Material Type				*/
+							/* Get 3rd field delimited by \			*/
+					get_field(3, "\\", FT0)
+							/* Get 2nd field delimited by -			*/
+					get_field(2, ",", gf_field_string)
+							/* Remove 1st character (space)			*/
+					tmpstr = seg(gf_field_string, 2, -len(gf_field_string))
+					
+					log_message = "Material tmpstr     : " & tmpstr
+					write_to_log(1,log_message)
+					
+					/* todo
+					1. Check the material type
+					2. find the category type for the material e.g. Cu Tinned
+					
+					3. Check the thickness
+					 if any of these fail select all parts and select the material type and thickiness
+					 if all ok select the material type and thickness
+					
+					
+					
+					
+					*/
+					
+					
+					#found_mtl_match=0
+					$found_mtl_cat=""
+					#found_thickness_idx=0
+					
+					/* used to populate the thinkness dropdown */
+					#max_matched_material_thickness = 20
+					$matched_material_thickness[max_matched_material_thickness]
+					#matched_material_ctr=0
+					
+					
+					n = 0
+					while(n < nummatls) {
+						n = n + 1
+						if(material_lookups[n][mlu_type_field] == tmpstr) {
+							
+							message="Found Material: " & tmpstr & "  Category: " &  material_lookups[n][mlu_cat_field] & " Thk: " &  material_lookups[n][mlu_thk_field] 
+							write_to_log(1,message)							
+							found_mtl_cat=material_lookups[n][mlu_cat_field]
+							
+							matched_material_ctr = matched_material_ctr + 1
+							matched_material_thickness[matched_material_ctr] = material_lookups[n][mlu_thk_field] 
+							
+							
+							if ( material_lookups[n][mlu_thk_field] == mtl_thickness ) {
+								message="Found Thickness: " & material_lookups[n][mlu_thk_field] 
+								
+								
+								write_to_log(1,message)
+								found_thickness_idx=matched_material_ctr
+								/* n = nummatls */
+							}
+							/* ate_material_selector = 1 		
+							uim_show("ate_category_selector_notifier")*/	
+							
+							
+							
+							
+							/* */ 
+							
+						} 
+					}
+					
+					uim_show("ate_category_selector_notifier")
+					if ( found_mtl_cat == "1001" ) {
+						uim_set("ate_material_category_selector","1")
+					}		
+										
+					if ( found_mtl_cat == "0101" ) {
+						uim_set("ate_material_category_selector","2")
+					}
+					
+					if ( found_mtl_cat == "0011" ) {
+						uim_set("ate_material_category_selector","3")						
+					}
+					
+					if ( found_mtl_cat == "0001" ) {
+						uim_set("ate_material_category_selector","4")						
+					}	
+					
+					ate_category_selector_notifier()
+
+					populate_matl_selector() 
+					
+					m = 0 
+					while ( m < maxnummatls ) {
+						m = m + 1
+						if ( combo_matls[m] == tmpstr ) {
+							
+							message="Found material at idx: " & str(m)
+							write_to_log(1,message)
+							
+							message="Material: " & combo_matls[m]
+							write_to_log(1,message)							
+							
+							$r=str(m)
+							uim_set("ate_material_selector",r)	
+							
+							/* uim_set("ate_material_selector",m)	*/
+							
+							uim_combo_del_all("ate_thickness_selector")
+							uim_combo_add("ate_thickness_selector", " ", 0) 
+							#i = 0
+							while ( i < max_matched_material_thickness ) {
+								i = i + 1
+								if ( matched_material_thickness[i] == "" ) {
+									i = max_matched_material_thickness
+								} else {
+									message="add to dropdown: " & matched_material_thickness[i]
+									write_to_log(1,message)		
+
+									uim_combo_add("ate_thickness_selector", matched_material_thickness[i], i) 
+									
+									combo_thks[i] = matched_material_thickness[i]
+									
+									
+								}
+								
+								
+							}
+							/* uim_set("ate_thickness_selector",str(found_thickness_idx)) */
+							ate_thickness_selector=found_thickness_idx
+							uim_show("ate_thickness_selector")
+
+							
+							
+							/* now get the thickness 
+							populate_matl_thk_selector()*/					
+							
+						}
+					}
+					/*
+					#t = 0
+					while ( t < numcombothks ) {
+						t = t + 1
+						if ( combo_thks[t] == mtl_thickness )  {
+							message="Found thickness at idx " & str(t)
+							write_to_log(1,message)
+							uim_set("ate_thickness_selector",str(t))
+						}
+					}
+					*/
+					ate_quantity = qty
+					uim_show("ate_quantity")
+					
+					/* get part description */
+					
+							/* Get Part Type				*/
+							/* Get 6th field delimited by \			*/
+					get_field(6, "\\", FT0)
+					tmpstr = seg(gf_field_string, 2, -len(gf_field_string))
+
+					m = 0
+					while(m < numtypes) \
+						{
+						m = m + 1
+
+						if(tmpstr == ate_types[m]) \
+							{
+							ate_type_selector = m
+							uim_show("ate_type_selector")
+
+							m = numtypes
+							}
+						}
+					
+							/* Scan for nest orientation symbol		*/
+			
+						scanstop = 0
+						scan(identified_text_patt, "s", 0)
+						while(next() && !scanstop) \
+							{
+							
+							/* next() */
+							
+							if(MK0 == fmark) \
+								{
+								scanstop = 1
+								ate_nest_orien_selector = val(FT0) - 1
+								uim_show("ate_nest_orien_selector")
+								}
+							}
+						
+						if(!scanstop) uim_notice(msg_1004, msg_ok, msg_null, 1)					
+					
+						
+/* ate_description   $desc
+
+t = 0
+					while ( t < numdescrips ) {
+						if ( combo
+						
+						
+					}
+
+					uim_show("ate_description")
+					
+					numdescrips
+					
+					descrip_lookups[n]
+
+
+
+
+
+*/					
+				
+		
+				
+					
+					
+					
+					}
+
+	
+					
+				}
+			}
+		}
+	}
+
+proc old_ate_get_part_data () \
+	{
+	#validated
+
+	#ux1
+	#uy1
+
+	#p
+	#m
+	#d
+
+	#tmpval
+	#fmark
+	#scanstop
+
+	$tmpstr
+	
+	$message /* TRW 09/02/19 */
+
+	/* write_to_log(1,"called proc ate_get_part_data ()") */
+
+
+					/* Force boundary visibility "ON"	*/
+	ate_hide_boundaries_tick_box = 1
+	uim_show("ate_hide_boundaries_tick_box")
+	ate_show_boundaries_notifier ()
+
+					/* Update prompt			*/
+	uim_set("ate_prompt_field", msg_503)
+
+	command_running (commandliveimage)
+
+					/* Get point location			*/
+	if(gin(0) == 27) \
+		{
+		command_running ("")
+
+		uim_set("ate_prompt_field", msg_null)
+		return
+		}
+
+	ux1 = UX;uy1 = UY
+	
+	collect_ID_Part_data ()
+	
+	validated = 0
+	p = 0
+	while(p < numIDpatts) \
+		{
+		p = p + 1
+		/* uim_notice(str(p), msg_ok, msg_null, 1) */
+		if(ux1 > id_patt_coords[p][ipc_blh_xcoord] && ux1 < id_patt_coords[p][ipc_trh_xcoord] && \
+			uy1 > id_patt_coords[p][ipc_blh_ycoord] && uy1 < id_patt_coords[p][ipc_trh_ycoord]) \
+			{
+			tmpstr = id_patts[p][id_pattname_field]
+			fmark = val(tmpstr)
+/*
+			message = "fmark : " & fmark & "  tmpstr : " & tmpstr
+			uim_notice(message, msg_ok, msg_null, 1)
+			
+*/		
+			
+			validated = 1
+
+			
+			
+			
+					/* Scan for part data text string		*/
+			scanstop = 0
+			scan(identified_text_patt, "t", 0)
+			
+			
+			while(!scanstop) \
+				{
+				
+				next() 
+
+				if(LN0 == "" && MK0 == fmark) \
+					{
+					scanstop = 1
+							/* Get SM Number prefix				*/
+							/* Get 2nd field delimited by \			*/
+					get_field(2, "\\", FT0)
+							/* Get 1st field delimited by -			*/
+					get_field(1, "-", gf_field_string)
+
+					tstring = "FTO=" & FT0 & "gf_field_string=" & gf_field_string
+					/* debug(tstring) */
+					message="tstring = " & tstring
+					write_to_log(1,message)
+					
+					/* Clear text boxes */
+					ate_PartNumberPrefix=""
+					uim_show("ate_PartNumberPrefix")
+					ate_EnqNumber=""
+					uim_show("ate_EnqNumber")		
+					ate_PartNumber=""
+					uim_show("ate_PartNumber")
+					
+					
+					
+					
+							/* Determine number and length of num string	*/
+					tmpval = val(gf_field_string)
+					tmpstr = str(tmpval)
+
+					
+					
+
+					/* Extract Prefix				*/
+					tstring = seg(gf_field_string, 2, -len(gf_field_string) + len(tmpstr))
+					/* debug(tstring) */
+					ate_PartNumberPrefix = seg(gf_field_string, 2, -len(gf_field_string) + len(tmpstr))
+					
+					
+					uim_show("ate_PartNumberPrefix")
+
+					message="ate_PartNumberPrefix = " & tstring
+					write_to_log(1,message)	
+
+
+							/* Get Part Number				*/
+							/* Get 2nd field delimited by \			*/
+					get_field(2, "\\", FT0)
+					part_data_string = gf_field_string
+					
+					message="part_data_string : " & part_data_string
+					write_to_log(1,message)	
+					
+					
+					
+							/* Get 2nd field delimited by -			*/
+					/* test for old seperator */
+					if (pos(gf_field_string, "-", 0)) {
+						
+						get_field(2, "-", part_data_string)
+						ate_PartNumber = gf_field_string
+						
+						get_field(1, "-", part_data_string)
+						tmpval = val(gf_field_string)
+						ate_SMnumber = str(tmpval)
+						
+						
+						
+					} else {
+						
+						
+						get_field(1, ".", part_data_string)
+						gf_field_string = seg(gf_field_string,2,len(gf_field_string)-1)
+						ate_SMnumber = gf_field_string
+						
+						if ( ate_PartNumberPrefix == "SM" ) {
+							/* debug("SM") */
+							get_field(2, ".", part_data_string)
+							ate_PartNumber = gf_field_string
+							
+							tmpval = val(ate_SMnumber)
+							ate_SMnumber = str(tmpval)
+							
+						
+						} else {
+							
+						/*
+							get_field(2, ".", part_data_string)
+							uim_show("ate_PartNumberPrefix") = gf_field_string
+						
+							get_field(3, ".", part_data_string)
+							ate_PartNumber = gf_field_string
+						*/
+						
+						}
+						
+						
+						
+					}
+					
+					result=""
+					split_string(FT0,"\\",2,&result)
+					result = seg(result,2,len(result)-1)
+					log_message = "Field 1 : " & result
+					write_to_log(1,log_message)
+						ate_PartNumber=""
+						split_string(result,".",3,&ate_PartNumber)
+						log_message = "Field 3 ate_PartNumber : " & ate_PartNumber
+						write_to_log(1,log_message)
+						
+						Section=""
+						split_string(result,".",2,&Section)
+						log_message = "Field 2 Section        : " & Section
+						write_to_log(1,log_message)
+						
+						SMandEnq=""
+						split_string(result,".",1,&SMandEnq)
+						log_message = "Field 1 SMandEnq       : " & SMandEnq
+						write_to_log(1,log_message)
+						
+						ate_SMnumber=""
+						ate_EnqNumber=""
+						
+						sep_posn = pos(SMandEnq,"-",1)
+						if ( sep_posn > 0 ) {							
+							split_string(SMandEnq,"-",1,&ate_SMnumber)
+							log_message = "Field 1 ate_SMnumber   : " & ate_SMnumber
+							write_to_log(1,log_message)
+							
+							split_string(SMandEnq,"-",2,&ate_EnqNumber)
+							log_message = "Field 1 ate_EnqNumber  : " & ate_EnqNumber
+							write_to_log(1,log_message)							
+						}
+						sep_posn = pos(SMandEnq," ",1)
+						if ( sep_posn > 0 ) {							
+							split_string(SMandEnq," ",1,&ate_SMnumber)
+							log_message = "Field 1 ate_SMnumber   : " & ate_SMnumber
+							write_to_log(1,log_message)
+							
+							split_string(SMandEnq," ",2,&ate_EnqNumber)
+							log_message = "Field 1 ate_EnqNumber  : " & ate_EnqNumber
+							write_to_log(1,log_message)							
+						}
+						
+						sep_posn = pos(SMandEnq,".",1)
+						if ( sep_posn > 0 ) {							
+							split_string(SMandEnq,".",1,&ate_SMnumber)
+							log_message = "Field 1 ate_SMnumber   : " & ate_SMnumber
+							write_to_log(1,log_message)
+							
+							split_string(SMandEnq,".",2,&ate_EnqNumber)
+							log_message = "Field 1 ate_EnqNumber  : " & ate_EnqNumber
+							write_to_log(1,log_message)							
+						}
+						
+						/* if part numnber is missing */
+						
+						if ( ate_SMnumber == "" ) {
+							$tmp_attrib_data=""
+							att_get_dwg_attr(smnumber_attr, &tmp_attrib_data)
+							split_string(tmp_attrib_data,".",1,&ate_SMnumber)
+							split_string(tmp_attrib_data,".",2,&ate_EnqNumber)
+							
+							
+						}
+						
+						
+						
+					ate_PartNumberPrefix=Section	
+						
+					message="SMnumber 2 : " & ate_SMnumber
+					write_to_log(1,message)					
+						
+						
+					uim_show("ate_SMnumber")	
+					uim_show("ate_EnqNumber")	
+					uim_show("Section")
+					uim_show("ate_PartNumberPrefix")
+					
+					
+					result=""
+					split_string(FT0,"\\",3,&result)
+					result = seg(result,2,len(result)-1)
+					log_message = "Field 2 : " & result
+					write_to_log(1,log_message)
+					
+					
+					
+					
+					
+					result=""
+					split_string(FT0,"\\",4,&result)
+					result = seg(result,2,len(result)-1)
+					log_message = "Field 3 : " & result
+					write_to_log(1,log_message)
+					
+					result=""
+					split_string(FT0,"\\",5,&result)
+					result = seg(result,2,len(result)-1)
+					log_message = "Field 4 : " & result
+					write_to_log(1,log_message)
+					
+					result=""
+					split_string(FT0,"\\",6,&result)
+					result = seg(result,2,len(result)-1)
+					log_message = "Field 5 : " & result
+					write_to_log(1,log_message)
+					
+					
+					
+					
+				/*
+					uim_show("ate_EnqNumber")
+					
+				
+					
+					
+					
+					message="ate_SMnumber = " & ate_SMnumber
+					write_to_log(1,message)
+					
+				
+					
+					
+					
+					
+					
+					write_to_log(1,"============= ate_get_part_data =================")
+					message="ate_SMnumber = " & ate_SMnumber
+					write_to_log(1,message)
+					
+					*/		
+					
+					message="ate_PartNumber = " & ate_PartNumber
+					write_to_log(1,message)	
+	
+					message="ate_PartNumberPrefix = " & ate_PartNumberPrefix
+					write_to_log(1,message)		
+							
+							
+					$pattern_out
+					to_pattern(ate_PartNumber,&pattern_out)
+		
+					log_message = "ate_PartNumber       : " & ate_PartNumber
+					write_to_log(1,log_message)
+					log_message = "Pattern              : " & pattern_out
+					write_to_log(1,log_message)
+
+/*
+					if ( pattern_match(pattern_out) == 1 ) {	
+							
+					if (( pattern_out == patterns[1] ) || ( pattern_out == patterns[2] )  || ( pattern_out == patterns[3] )) {
+			
+						write_to_log(1,"Pattern Match")		
+							
+						$delimiter="."
+						column=1
+						$result
+						split_string(ate_PartNumber,delimiter,column,&result)
+						log_message = "Column     : " & result
+						write_to_log(1,log_message)
+						ate_EnqNumber = result
+						uim_show("ate_EnqNumber")
+						
+						column=2
+						result=""
+						split_string(ate_PartNumber,delimiter,column,&result)	
+						ate_PartNumberPrefix = result
+						uim_show("ate_PartNumberPrefix")
+									
+						column=3
+						result=""
+						split_string(ate_PartNumber,delimiter,column,&result)
+
+						
+						ate_PartNumber = result
+						uim_show("ate_PartNumber")	
+							
+							
+					}		
+							
+							
+		*/					
+							
+							
+							
+					/* Check / enable prefix field			
+					if(ate_PartNumberPrefix != "SM" && ate_prefix_SM_tick_box == 1) {
+						
+						ate_prefix_SM_tick_box = 0
+						uim_show("ate_prefix_SM_tick_box")
+
+						uim_enable("ate_PartNumberPrefix", 0, 1)
+					} else {
+						ate_prefix_SM_tick_box = 0
+						uim_show("ate_prefix_SM_tick_box")
+					
+					
+					}
+					*/
+					if( ate_PartNumberPrefix == "SM" ) {
+						ate_prefix_SM_tick_box = 1
+						uim_show("ate_prefix_SM_tick_box")
+						uim_enable("ate_PartNumberPrefix", 0, 0)
+					} else {
+						ate_prefix_SM_tick_box = 0
+						uim_show("ate_prefix_SM_tick_box")
+						uim_enable("ate_PartNumberPrefix", 0, 1)
+					}
+					
+					
+					tstring = gf_field_string & " val=" & str(tmpval) & " tmpstr=" & tmpstr & " ate_PartNumberPrefix=" & ate_PartNumberPrefix & " ate_PartNumber=" & ate_PartNumber
+					/* debug(tstring) */
+					
+					/*
+					
+								$delimiter="."
+			column=1
+			$result
+			split_string(ate_PartNumber,delimiter,column,&result)
+			log_message = "Column     : " & result
+			write_to_log(1,log_message)
+			ate_EnqNumber = result
+			uim_show("ate_EnqNumber")
+			
+			column=2
+			result=""
+			split_string(ate_PartNumber,delimiter,column,&result)	
+			ate_PartNumberPrefix = result
+			uim_show("ate_PartNumberPrefix")
+						
+			column=3
+			result=""
+			split_string(ate_PartNumber,delimiter,column,&result)
+
+			
+			ate_PartNumber = result
+			uim_show("ate_PartNumber")
+					
+					
+					
+					
+					uim_show("ate_PartNumberPrefix")
+					
+					
+					
+					
+					uim_show("ate_SMnumber")
+
+					*/
+					
+					
+					uim_show("ate_PartNumber")
+
+					log_message = "FT0       : " & FT0
+					write_to_log(1,log_message)
+
+							/* Get Material Type				*/
+							/* Get 3rd field delimited by \			*/
+					get_field(3, "\\", FT0)
+							/* Get 2nd field delimited by -			*/
+					get_field(2, ",", gf_field_string)
+							/* Remove 1st character (space)			*/
+					tmpstr = seg(gf_field_string, 2, -len(gf_field_string))
+					
+					log_message = "Material tmpstr     : " & tmpstr
+					write_to_log(1,log_message)
+					
+					/* todo
+					1. Check the material type
+					2. find the category type for the material e.g. Cu Tinned
+					
+					3. Check the thickness
+					 if any of these fail select all parts and select the material type and thickiness
+					 if all ok select the material type and thickness
+					
+					
+					
+					
+					*/
+					
+					
+					#found_mtl_match=0
+					$found_mtl_cat=""
+					n = 0
+					while(n < nummatls) {
+						n = n + 1
+						if(material_lookups[n][mlu_type_field] == tmpstr) {
+							
+							message="Found Material: " & tmpstr & "  Category: " &  material_lookups[n][mlu_cat_field] & " Thk: " &  material_lookups[n][mlu_thk_field] 
+							
+							
+							
+							
+							ate_material_selector = 1				
+							uim_show("ate_category_selector_notifier")
+							
+							write_to_log(1,message)
+							found_mtl_match=1
+							/* n = nummatls */
+						} 
+					}
+					
+					populate_category_selector ()
+					ate_category_selector = 1
+					uim_show("ate_category_selector") 
+					
+
+					
+					ate_material_category_selector = 1
+					
+					
+					populate_matl_selector()
+					
+					
+					
+		/*
+					else {
+							message="Error could not find material '" & tmpstr & "'"
+							write_to_log(LOCAL_DEBUG_NONE,message)
+						}
+					*/
+					
+					m = 0
+					while(m < numcombomatls) \
+						{
+						m = m + 1
+
+						if(tmpstr == combo_matls[m]) \
+							{
+							log_message = "Material m     : [" & str(m) & "] " & combo_matls[m]
+							write_to_log(1,log_message)	
+								
+							/* ate_material_selector = m */
+							ate_material_selector = m
+							
+							
+							uim_show("ate_material_selector")
+
+							ate_material_selector_notifier()
+							
+							m = nummatls
+							
+							
+							}
+						}
+
+
+
+							/* Get Material Thickness			*/
+							/* Get 3rd field delimited by \			*/
+					get_field(3, "\\", FT0)
+							/* Get 2nd field delimited by -			*/
+					get_field(1, ",", gf_field_string)
+							/* Remove 1st character (space)			*/
+					tmpstr = seg(gf_field_string, 2, -len(gf_field_string))
+					debug(tmpstr)
+					/* tmpval = val(tmpstr)
+					$mat_thickness = str(tmpval)
+					debug(mat_thickness) */
+					
+					m = 0
+					while(m < numcombothks) \
+						{
+						m = m + 1
+
+						if(tmpstr == combo_thks[m]) \
+							{
+							ate_thickness_selector = m
+							uim_show("ate_thickness_selector")
+
+							m = numcombothks
+							}
+						}
+
+
+
+
+							/* Get Quantity					*/
+							/* Get 4th field delimited by \			*/
+					get_field(4, "\\", FT0)
+					tmpval = val(gf_field_string)
+					ate_quantity = str(tmpval)
+					uim_show("ate_quantity")
+
+							/* Get Description				*/
+							/* Get 5th field delimited by \			*/
+					get_field(5, "\\", FT0)
+					ate_description = seg(gf_field_string, 2, -len(gf_field_string))
+					uim_show("ate_description")
+
+							/* Reset Description Selector			*/
+					ate_description_selector = 0
+					d = 0
+					while(d < numdescrips) \
+						{
+						d = d + 1
+						if(ate_description == descrip_lookups[d]) \
+							{
+							ate_description_selector = d
+							d = numdescrips
+							}
+						}
+					uim_show("ate_description_selector")
+
+
+
+							/* Get Part Type				*/
+							/* Get 6th field delimited by \			*/
+					get_field(6, "\\", FT0)
+					tmpstr = seg(gf_field_string, 2, -len(gf_field_string))
+
+					m = 0
+					while(m < numtypes) \
+						{
+						m = m + 1
+
+						if(tmpstr == ate_types[m]) \
+							{
+							ate_type_selector = m
+							uim_show("ate_type_selector")
+
+							m = numtypes
+							}
+						}
+					}
+				}
+				
+							/* Scan for nest orientation symbol		*/
+			
+			scanstop = 0
+			scan(identified_text_patt, "s", 0)
+			while(next() && !scanstop) \
+				{
+				
+				/* next() */
+				
+				if(MK0 == fmark) \
+					{
+					scanstop = 1
+					ate_nest_orien_selector = val(FT0) - 1
+					uim_show("ate_nest_orien_selector")
+					}
+				}
+			
+			if(!scanstop) uim_notice(msg_1004, msg_ok, msg_null, 1)
+
+			p = numIDpatts
+			}
+		}
+
+
+	command_running ("")
+
+	uim_set("ate_prompt_field", msg_null)
+
+	if(!validated) uim_notice(msg_1003, msg_ok, msg_null, 1)
+	}
+
+
+proc ate_resend_notifier () {
+	#listrow = 1 
+	uim_list_del_all("ate_partsummary_list")
+	
+	listrow = 0
+	uim_list_add("ate_partsummary_list", " ", listrow)
+	listrow = listrow + 1
+	uim_list_add("ate_partsummary_list", " ", listrow)
+	listrow = listrow + 1
+	
+	
+	message="resending EHRT data"
+	write_to_log(1,message)	
+
+	uim_list_add("ate_partsummary_list", "Resending copper parts to EHRT database ...", listrow)
+	listrow = listrow + 1
+	
+	
+	message="Shell command : " & last_shell_cmd
+	write_to_log(1,message)	
+	
+	
+	rshell(last_shell_cmd)
+	
+	uim_list_add("ate_partsummary_list", "Resending of copper parts finished", listrow)
+	
+	
+}
+
+
+
+proc ate_resend_notifier_old () {
+	#listrow = 1 
+	uim_list_del_all("ate_partsummary_list")
+	
+	
+	message="resending EHRT data"
+	write_to_log(1,message)
+	
+	
+	
+	
+	if ( len(last_ehrt_ascii_file) == 0 ) {
+		message="EHRT Output file not defined"
+		write_to_log(1,message)
+		
+	} else {
+		
+		uim_list_add("ate_partsummary_list", "Resending copper parts to EHRT database ...", listrow)
+		/* push to EHRT database */
+		message="EHRT Data Import. Location : " & ehrt_database_location & "  Output File : " & last_ehrt_ascii_file
+		write_to_log(1,message)
+		listrow = listrow + 2
+		
+		
+		
+		EhrtAccessDataImport(last_ehrt_ascii_file,ehrt_database_location)		
+		listrow = listrow + 1	
+		
+		uim_list_add("ate_partsummary_list", "Resending of copper parts finished", listrow)
+		write_to_log(1,"EHRT resend complete")	
+	}
+
+
+	listrow = listrow + 1
+
+}
+
+
+
+
+
+proc ate_close_notifier (#menuref) \
+	{
+	#confdoc
+
+	$tmpstr
+	$init_xml_element
+	$xml_element
+
+
+
+	if(menuref == 1) \
+		{
+		uim_get("ate_PartNumberPrefix")
+		uim_get("ate_PartNumber")
+
+		uim_get("ate_prefix_SM_tick_box")
+		uim_get("ate_partnum_auto_inc_tick_box")
+
+		uim_get("ate_material_selector")
+		uim_get("ate_thickness_selector")
+
+		uim_get("ate_quantity")
+
+		uim_get("ate_desription_selector")
+		uim_get("ate_description")
+
+		uim_get("ate_type_selector")
+
+		uim_get("ate_nest_orien_selector")
+
+		confdoc = xml_open(pathed_GUI_lookup_file)
+		if(!confdoc) \
+			{
+			tmpstr = formats(msg_903, ate_GUI_lookup_file)
+			uim_notice(tmpstr, msg_ok, msg_null, 1)
+
+			uim_dismiss("ate_partID_popup1")
+
+			return
+			}
+
+				/* Save GUI settings to user lookup		*/
+		init_xml_element = "/ATEPartPrep/"
+
+		xml_element = init_xml_element & "PartNumberPrefix"
+		xml_set(confdoc, xml_element, ate_PartNumberPrefix)
+
+		xml_element = init_xml_element & "PartNumber"
+		xml_set(confdoc, xml_element, ate_PartNumber)
+
+		xml_element = init_xml_element & "SMPrefixTickbox"
+		xml_set(confdoc, xml_element, str(ate_prefix_SM_tick_box))
+
+		xml_element = init_xml_element & "AutoIncPartNumber"
+		xml_set(confdoc, xml_element, str(ate_partnum_auto_inc_tick_box))
+
+		xml_element = init_xml_element & "MaterialSelector"
+		xml_set(confdoc, xml_element, str(ate_material_selector))
+
+		xml_element = init_xml_element & "ThicknessSelector"
+		xml_set(confdoc, xml_element, str(ate_thickness_selector))
+
+		xml_element = init_xml_element & "Quantity"
+		xml_set(confdoc, xml_element, ate_quantity)
+
+		xml_element = init_xml_element & "DescriptionSelector"
+		xml_set(confdoc, xml_element, str(ate_description_selector))
+
+		xml_element = init_xml_element & "Description"
+		xml_set(confdoc, xml_element, ate_description)
+
+		xml_element = init_xml_element & "TypeSelector"
+		xml_set(confdoc, xml_element, str(ate_type_selector))
+
+		xml_element = init_xml_element & "NestOrienSelector"
+		xml_set(confdoc, xml_element, str(ate_nest_orien_selector))
+
+		xml_save(confdoc, pathed_GUI_lookup_file)
+		xml_close(confdoc)
+
+
+		uim_dismiss("ate_partID_popup1")
+		} \
+	else if(menuref == 2) \
+		{
+		uim_dismiss("ate_createpart_popup1")
+		} \
+	else if(menuref == 3) \
+		{
+		uim_dismiss("ate_schedulepart_popup1")
+		}
+	}
+
+proc ate_save_to_browse_notifier () {
+		
+	write_to_log(1,"ate_save_to_browse_notifier")
+		
+	$tmpstr = ate_save_to_folder
+
+	uim_get("ate_save_to_folder")
+	tmpstr = ate_save_to_folder
+	saved_parts_folder=tmpstr
+	if (browse_for_folder(1, msg_37, msg_38,&tmpstr)) {
+		uim_set("ate_save_to_folder", tmpstr)
+	} else {
+		write_to_log(1,"Something went wrong!")	
+	}
+}
+
+/* Find any tooling that is nested within parts */
+proc find_nested_tooling ($sympatt) {
+	s = 1
+	while(scan(sympatt, "sx", s)) {
+		if ( (pos(FT0,"TN",1) == 1 ) || ( pos(FT0,"Tn",1) == 1 ) || ( pos(FT0,"tn",1) == 1 ) || ( pos(FT0,"tN",1) == 1 )){
+			/* It starts with a TN but is it a real tool e.g. TNfish would not be a real tool where as TN1 would */
+			if ( val(FT0) > 0 ) {
+				if ( LN0 != "") {
+					angle = FA0
+					if ( find() == 1 ) {
+						fmac('j')
+						mac('\?_ angle')
+						fmac('\\')
+						pnt(S0X,S0Y)
+						fmac(' \!')
+						fmac('\\')
+					} else {
+						print("Find failed " & FT0);wait(2)
+					}
+				} else {
+					if ( SR0 > 1 ) {
+						angle = FA0
+						if ( find() == 1 ) {
+							fmac('j')
+							mac('\?_ angle')
+							fmac('\\')
+							pnt(S0X,S0Y)
+							fmac(' \!')
+							fmac('\\')
+						} else {
+							print("Find failed " & FT0);wait(2)
+						}
+					}
+				}
+			}
+		}
+		s = s + 1
+	}
+
+	s = 1
+	while(scan(sympatt, "s", s)) {
+		if ( pos(FT0,"TN",1) == 1 ) {
+			/* It starts with a TN but is it a real tool */
+			if ( val(FT0) > 0 ) {
+				if ( LN0 != "") {
+					angle = FA0
+					if ( find() == 1 ) {
+						fmac('j')
+						mac('\?_ angle')
+						fmac('\\')
+						pnt(S0X,S0Y)
+						fmac(' \!')
+						fmac('\\')
+					}
+				}
+			}
+		}
+		s = s + 1
+	}
+	/* find any full lines/arcs that are pen 1 that are nested within parts */
+	/* print("Starting scan looking for lines ...");wait(3) */
+
+	#max_coords=500
+	#coords[max_coords][6]
+	s = 1
+	ctr = 0
+	while(scan(sympatt, "l", s)) {
+		if (( LN0 != "" ) && ( FP0 == 1 ) && ( LT0 == 1 )) {
+			ctr = ctr + 1
+			if ( ctr <= max_coords ) {
+				coords[ctr][1] = S0X
+				coords[ctr][2] = S0Y
+				coords[ctr][3] = E0X
+				coords[ctr][4] = E0Y
+				coords[ctr][5] = C0X
+				coords[ctr][6] = C0Y
+			}
+		}
+		s = s + 1
+	}
+	if ( ctr > max_coords ) {
+		uim_notice("Part lines could not be converted as the coords array is too small!", msg_ok, msg_null, 1)
+	}
+
+	/* print("Relacing lines ...");wait(3) */
+	while ( ctr > 0 ) {
+		drawline(coords[ctr][1],coords[ctr][2],coords[ctr][3],coords[ctr][4],LT0)
+		ctr = ctr - 1
+	}
+	s = 1
+	ctr = 0
+	/* print("Starting scan looking for arcs ...");wait(3) */
+	while(scan(sympatt, "a", s)) {
+		if (( LN0 != "" ) && ( FP0 == 1 ) && ( LT0 == 1 )) {
+			ctr = ctr + 1
+			
+			
+			/* 16-04-2014
+			coords[ctr][1] = C0X
+			coords[ctr][2] = C0Y
+			*/
+			coords[ctr][1] = C0X/DRS
+			coords[ctr][2] = C0Y/DRS
+			
+		}
+		s = s + 1
+	}
+	/* print("Moving arcs ...");wait(3) */
+	while ( ctr > 0 ) {
+		UX = coords[ctr][1]
+		UY = coords[ctr][2]
+		fmac('a') 
+		fmac('j')
+		fmac(' ')
+		fmac('\\')
+		fmac('\!')
+		ctr = ctr - 1
+	}
+	/* print("Removing  step a repeat groups ...");wait(3) */
+		/* removel step and repeat groups that consist of REAL tools */
+	s = 1
+	while(scan(sympatt, "sx", s)) {
+		if ( (pos(FT0,"TN",1) == 1 ) || ( pos(FT0,"Tn",1) == 1 ) || ( pos(FT0,"tn",1) == 1 ) || ( pos(FT0,"tN",1) == 1 )){
+		/* It starts with a TN but is it a real tool e.g. TNfish would not be a real tool where as TN1 would */
+			if (( val(FT0) > 0 ) && ( SR0 > 1 )) {
+				find ()
+				rfmac('x')
+				s = s - 1
+			}				
+		}
+		s = s + 1
+	}			
+	/* print("Removing parts ...");wait(3) */
+	/* force removal of parts */
+	s = 1
+	while(scan(sympatt, "s", s)) {
+		remove = 0
+		li = 0
+		while ( li < max_parts_to_delete ) {
+			li = li + 1
+			if ( pos(FT0,parts_to_delete[li],1) == 1 ) {
+				remove = 1
+				li = max_parts_to_delete
+			}
+		}
+		if (( remove == 1 ) && ( LN0 == "" )) {
+			/* print(str(s) & ">Trying to remove " & FT0);wait(1) */
+			
+			if ( find () == 1 ) {
+				/* print("Find OK");wait(1) */
+				rfmac('x')
+				s = s - 1
+			} else {
+				print("Find failed " & FT0);wait(2)
+			}
+
+		}
+		s = s + 1
+	}
+	/* print("Starting tidy up ...");wait(3) */
+	/* now tidy up the parts */
+	s = 1
+	while(scan(sympatt, "aelstd", s)) {
+		if(LN0 == "") {
+			remove = 0
+			
+			if ( TF0 == "s") {
+				remove = 1
+				li = 0
+				while ( li < max_parts_to_be_kept ) {
+					li = li + 1
+					if ( pos(FT0,parts_to_be_kept[li],1) == 1 ) {
+						remove = 0
+						li = max_parts_to_be_kept
+					}
+				}
+			}
+			
+
+			if (( TF0 == "a") || ( TF0 == "l") || ( TF0 == "e")) {
+				remove = 1
+				li = 0
+				while ( li < max_pens_to_be_kept ) {
+					li = li + 1
+					if (( FP0 == pens_to_be_kept[li][pens_to_be_kept_pen] ) && ( LT0 == pens_to_be_kept[li][pens_to_be_kept_linetype] )){
+						remove = 0
+						li = max_pens_to_be_kept
+					}
+				}
+			}
+
+			if (( TF0 == "t") || ( TF0 == "d")) {
+				remove = 1
+
+			}
+
+			if ( remove == 1 ) {
+				find ()
+				rfmac('x')
+				s = s - 1
+			}
+
+		}
+		s = s + 1
+
+
+
+	}	
+}
+		
+/* Builds Parts - Called from the Create Parts Assistant Button */ 
+proc ate_create_parts_notifier () \
+	{
+		
+	write_to_log(1,"ate_create_parts_notifier Called")	
+		
+	$tmpstr
+
+	#attrs
+
+	#d
+	#d2
+	#i
+	#r
+	#s
+
+	#sumrowref
+
+	#duplicates
+
+	#actualmaxqty
+
+	#blhx;#blhy;#trhx;#trhy
+
+	$shortsymname
+	$pathedsymname
+	$boundarypatt
+	$sympatt = "/macrosympattern"
+
+	$partIDref
+	$errmsg
+
+	#sub_ptn = 0
+	#tolerance = 0.2
+	#realise_ellipses = 1
+	#remove_small = 1
+	#close_small_gaps = 1
+	#merge_overlaps = 1
+	#simplify_data = 1
+
+	#graphics = 0
+
+	#listrow = 0
+
+	#confdoc
+	#xmlnumrows
+
+	$style65 = "s65"
+	$style66 = "s66"
+
+
+	/* Copper Parts */
+	max_copper_parts=100
+	$copper_parts[max_copper_parts]
+	copper_ctr=0
+	saved_parts_folder=""
+
+	$formatting [numpartslistcols][2]
+		/* [][1] = data style		*/
+		/* [][2] = cell style		*/
+
+	formatting[1][1] = "String"
+	formatting[1][2] = "s66"
+
+	formatting[2][1] = "Number"
+	formatting[2][2] = "s66"
+
+	formatting[3][1] = "Number"
+	formatting[3][2] = "s67"
+
+	formatting[4][1] = "Number"
+	formatting[4][2] = "s67"
+
+	formatting[5][1] = "String"
+	formatting[5][2] = "s66"
+
+	formatting[6][1] = "String"
+	formatting[6][2] = "s66"
+
+	formatting[7][1] = "String"
+	formatting[7][2] = "s66"
+
+	formatting[8][1] = "String"
+	formatting[8][2] = "s69"
+
+
+	$progtableformattingstyle = "s64"
+
+	/* TRW - June 2020 */
+	make_pattern_invisable("Bend Down Centerline")
+	make_pattern_invisable("Bend Up Centerline")
+	make_pattern_invisable("Dimension")
+	make_pattern_invisable("Datum Symbol")
+	
+
+	uim_get("ate_max_part_qty_field")
+	ate_max_part_qty = val(ate_max_part_qty_field)
+
+					/* Validate Save to entry			*/
+	uim_get("ate_save_to_folder")
+	if(ate_save_to_folder == "") \
+		{
+		uim_notice(msg_1500, msg_ok, msg_null, 1)
+		return
+		}
+		
+	/* create sysmbols folder 
+	
+	command = "if not exist \"" & ate_save_to_folder & " mkdir \"" &  ate_save_to_folder & "\""
+	write_to_log(1,command)
+	rshell(command)	
+	*/
+	ate_save_to_folder = ate_save_to_folder & "\\" & "Symbols"
+	create_dir(ate_save_to_folder)
+	
+	message="ate_PartNumberPrefix : " & ate_PartNumberPrefix
+	write_to_log(1,message)
+	
+	PartNumberPrefix = ate_PartNumberPrefix
+	
+	s_pos = pos(ate_PartNumberPrefix,"/",1)
+	if ( s_pos > 0 ) {
+		write_to_log(1,"has a slash")
+		tmp_string_1=""
+		split_string(ate_PartNumberPrefix,"/",1,&tmp_string_1)
+		tmp_string_2=""
+		split_string(ate_PartNumberPrefix,"/",2,&tmp_string_2)
+		
+		ate_PartNumberPrefix = tmp_string_1 & "-" & tmp_string_2
+		
+	}
+	
+	$job_dir=""
+	if (( ate_SMnumber == "" ) || ( ate_EnqNumber == "" )) {
+		
+		message="No SM Number and/or Enq Number , will use drawing atribs"
+		write_to_log(LOCAL_DEBUG_SOME,message)
+		
+		att_get_dwg_attr(smnumber_attr, &ate_SMnumber)
+		
+		job_dir = ate_save_to_folder & "\\" & ate_SMnumber /* & "-" & ate_EnqNumber & "." & PartNumberPrefix */
+		
+	} else {
+		
+		job_dir = ate_save_to_folder & "\\" & ate_SMnumber & "-" & ate_EnqNumber & "." & PartNumberPrefix
+		
+	}
+	
+	
+	
+	
+	
+
+	create_dir(job_dir)
+	message="job_dir : " & job_dir
+	write_to_log(1,message)	
+	
+	$ehrt_dir = job_dir & "\\EHRT"
+	create_dir(ehrt_dir)
+	
+	
+	
+					/* Validate partslist filename			*/
+	uim_get("ate_partslist_filename")
+	if(ate_partslist_filename == "") \
+		{
+		uim_notice(msg_1505, msg_ok, msg_null, 1)
+		return
+		}
+
+					/* Validate Max Qty entry			*/
+	if(ate_max_part_qty < 1) \
+		{
+		tmpstr = formats(msg_1501, ate_max_part_qty_field)
+		uim_notice(tmpstr, msg_ok, msg_null, 1)
+		return
+		}
+
+					/* Validate pattern structure exists		*/
+	if(!scan(identified_patt, "ip", 0)) \
+		{
+		uim_notice(msg_1502, msg_ok, msg_null, 1)
+		return
+		}
+
+					/* Force boundary visibility "ON"	*/
+	fmac('\?\p identified_patt?')
+	fmac('\?v 1?')
+	fmac('z')
+
+
+					/* Collect part data				*/
+				
+	collect_ID_Part_data ()
+	collect_part_parameters_data ()
+
+					/* Check for duplicate part names		*/
+	d = 0
+	while(d < numIDpatts) \
+		{
+		d = d + 1
+
+		tmpstr = part_parameters[d][pp_name_field]
+		
+			
+
+		d2 = 0
+		while(d2 < numIDpatts) \
+			{
+			d2 = d2 + 1
+			if(d2 == d) d2 = d2 + 1
+
+			if(d2 < numIDpatts && tmpstr == part_parameters[d2][pp_name_field]) \
+				{
+
+				highlight_duplicate_parts (tmpstr)
+
+						/* Report duplicate part names			*/
+						
+				/* TRW 14/07/2020 */		
+				/* [][1] = partname		*/
+				/* [][2] = material type	*/
+				/* [][3] = thickness		*/
+				/* [][4] = quantity		*/
+				/* [][5] = description		*/
+				/* [][6] = type			*/
+				/* [][7] = nest orien		*/
+				/* [][8] = IDnumber		*/	
+				
+				/* tmpstr = "Dup Part [" & part_parameters[d2][pp_name_field] & "][" & part_parameters[d2][material type] & "][" & part_parameters[d2][thickness]  & "]"   */
+				
+				tmpstr = str(d2) & " Name:" & part_parameters[d2][pp_name_field] & " Desc:" & part_parameters[d2][pp_desc_field] & " Qty:" & part_parameters[d2][pp_qty_field]
+				
+				
+				uim_list_add("ate_partsummary_list", tmpstr, 0)
+				
+				/*tmpstr = str(d2) & " Qty:" & part_parameters[d2][pp_qty_field] & " Desc:" & part_parameters[d2][pp_desc_field] & " Type:" & part_parameters[d2][pp_type_field]
+				
+				
+				uim_list_add("ate_partsummary_list", tmpstr, 0)
+				
+				tmpstr = str(d2) & " " & part_parameters[d2][pp_orien_field] & " " & part_parameters[d2][pp_idnum_field] 
+				
+				
+				uim_list_add("ate_partsummary_list", tmpstr, 0)
+				*/
+
+
+				
+				
+				uim_notice(msg_1503, msg_ok, msg_null, 1)
+
+				d2 = numIDpatts
+				d = numIDpatts
+				/* return */
+				}
+			}
+		}
+
+
+
+
+					/* Check if filename already exists		
+	ate_pathed_partslist_file = ate_save_to_folder & "\\" & ate_partslist_filename & ".xml" */
+	ate_pathed_partslist_file = job_dir & "\\" & ate_partslist_filename & ".xml"
+
+	if(sys_filesize (ate_pathed_partslist_file) > 0) \
+		{
+		tmpstr = formats(msg_1506, ate_pathed_partslist_file)
+		if(uim_notice(tmpstr, msg_overwrite, msg_cancel, 1) == 2) return
+		}
+
+
+
+
+
+					/* Check for max quantity exceeded			*/
+	actualmaxqty = 0
+	d = 0
+	while(d < numIDpatts) \
+		{
+		d = d + 1
+
+		if(val(part_parameters[d][pp_qty_field]) > ate_max_part_qty) \
+			{
+			if(val(part_parameters[d][pp_qty_field]) > actualmaxqty) \
+						actualmaxqty = val(part_parameters[d][pp_qty_field])
+			}
+		}
+
+					/* Report max qty exceeded				*/
+	if(actualmaxqty > ate_max_part_qty) \
+		{
+		tmpstr = formats(msg_1504, str(actualmaxqty))
+		uim_notice(tmpstr, msg_ok, msg_null, 1)
+
+		return
+		}
+
+					/* Create part symbols					*/
+	uim_list_del_all("ate_partsummary_list")
+
+	listrow = 0
+	uim_list_add("ate_partsummary_list", " ", listrow)
+	listrow = listrow + 1
+	uim_list_add("ate_partsummary_list", " ", listrow)
+
+	failedparts = 0
+	d = 0
+	while(d < numIDpatts) \
+		{
+		d = d + 1
+		
+		/* check that all fields part_parameters in are populated */
+			
+		$tmp_str = ""
+		#p = 1
+		while ( p < 8 ) \
+			{
+			tmp_str = tmp_str & part_parameters[d][p]
+			p = p + 1
+			}
+			
+		if ( tmp_str == "" ) \
+			{
+			$message = "Skipping part that has no parameters "
+			
+			/*
+			message = message & "blh x coord[" & str(id_patt_coords[d][1]) & "] "
+			message = message & "blh y coord[" & str(id_patt_coords[d][2]) & "] "
+			message = message & "trh x coord[" & str(id_patt_coords[d][3]) & "] "
+			message = message & "trh y coord[" & str(id_patt_coords[d][4]) & "] "
+			message = message & "IDnumber[" & str(id_patt_coords[d][5]) & "] "
+			*/
+			uim_notice(message, msg_ok, msg_null, 1)
+			
+			} \
+		else \
+			{
+				
+			shortsymname = part_parameters[d][pp_name_field]
+			/* pathedsymname = ate_save_to_folder & "\\" & shortsymname & ".sym" */
+			
+			pathedsymname = job_dir & "\\" & shortsymname & ".sym"
+			
+			message="shortsymname=" & shortsymname
+			write_to_log(1,message)
+			message="job_dir=" & job_dir
+			write_to_log(1,message)
+
+			partIDref = part_parameters[d][pp_idnum_field]
+
+						/* Update summary list running prompt		*/
+			tmpstr = "Processing part " & str(d) & " of " & str(numIDpatts) & ": " & shortsymname
+			uim_list_del("ate_partsummary_list", 0)
+			uim_list_add("ate_partsummary_list", tmpstr, 0)
+			wait(.1)
+
+						/* Get boundary pattern name			*/
+			boundarypatt = ""
+			i = 0
+			while(i < numIDpatts) \
+				{
+				i = i + 1
+			
+				if(id_patts[i][id_idnum_field] == partIDref) \
+					{
+					boundarypatt = id_patts[i][id_pattname_field]
+					i = numIDpatts
+					}
+				}
+
+						/* Validate boundary pattern name		*/
+			if(boundarypatt == "") \
+				{
+				errmsg = "ERROR: Failed to identify boundary for " & shortsymname
+				uim_notice(errmsg, msg_ok, msg_null, 1)
+				return
+				}
+
+						/* Turn off boundary pattern			*/
+			fmac('\?\p boundarypatt?')
+			fmac('\?v 0?')
+
+						/* Create temporary pattern for symbol creation	*/
+			mac('\?\p sympatt, "y"?')
+
+						/* Get boundary coords				*/
+			blhx = -9999
+			i = 0
+			while(i < numIDpatts) \
+				{
+				i = i + 1
+				if(id_patt_coords[i][ipc_idnumber] == val(partIDref)) \
+					{
+					blhx = id_patt_coords[i][ipc_blh_xcoord]
+					blhy = id_patt_coords[i][ipc_blh_ycoord]
+					trhx = id_patt_coords[i][ipc_trh_xcoord]
+					trhy = id_patt_coords[i][ipc_trh_ycoord]
+
+					i = numIDpatts
+					}
+				}
+
+						/* Validate coordinates selected		*/
+			if(blhx == -9999) \
+				{
+				errmsg = "ERROR: Failed to retreive boundary limits for " & shortsymname
+				uim_notice(errmsg, msg_ok, msg_null, 1)
+				return
+				}
+						/* Jump geometry in boundary to cursor		*/
+			pnt(0,0)
+			UX = blhx
+			UY = blhy
+			fmac('w')
+			UX = trhx
+			UY = trhy
+			fmac('j')
+
+						/* Fix geometry in temporary pattern		*/
+			pnt(0,0)
+			fmac(' \!')
+
+/*
+print(shortsymname, " *** ", boundarypatt, " *** ", partIDref)
+gin(0)
+print("")
+*/
+
+						/* Scan delete all text and dimensions		*/
+			uim_get("ate_filter_features_tick_box")
+			if ( ate_filter_features_tick_box == 0 ) {
+				s = 1
+				while(scan(sympatt, "td", s)) {
+					if(LN0 == "") {
+						
+						if (isEhrtDim(FT0) != 1 ) {						
+							find ()
+							rfmac('x')
+							s = s - 1
+						}
+						
+					}
+					s = s + 1
+				}			
+			} else {
+				/* find any tooling that is nested within parts */
+				
+				
+				
+				
+				
+				
+				s = 1
+				while(scan(sympatt, "sx", s)) {
+					if ( (pos(FT0,"TN",1) == 1 ) || ( pos(FT0,"Tn",1) == 1 ) || ( pos(FT0,"tn",1) == 1 ) || ( pos(FT0,"tN",1) == 1 )){
+						/* It starts with a TN but is it a real tool e.g. TNfish would not be a real tool where as TN1 would */
+						if ( val(FT0) > 0 ) {
+							if ( LN0 != "") {
+								angle = FA0
+								if ( find() == 1 ) {
+									fmac('j')
+									mac('\?_ angle')
+									fmac('\\')
+									pnt(S0X,S0Y)
+									fmac(' \!')
+									fmac('\\')
+								} else {
+									print("Find failed " & FT0);wait(2)
+								}
+							} else {
+								if ( SR0 > 1 ) {
+									angle = FA0
+									if ( find() == 1 ) {
+										fmac('j')
+										mac('\?_ angle')
+										fmac('\\')
+										pnt(S0X,S0Y)
+										fmac(' \!')
+										fmac('\\')
+									} else {
+										print("Find failed " & FT0);wait(2)
+									}
+								}
+							}
+						}
+					}
+					s = s + 1
+				}
+				
+				s = 1
+				while(scan(sympatt, "s", s)) {
+					if ( pos(FT0,"TN",1) == 1 ) {
+						/* It starts with a TN but is it a real tool */
+						if ( val(FT0) > 0 ) {
+							if ( LN0 != "") {
+								angle = FA0
+								if ( find() == 1 ) {
+									fmac('j')
+									mac('\?_ angle')
+									fmac('\\')
+									pnt(S0X,S0Y)
+									fmac(' \!')
+									fmac('\\')
+								}
+							}
+						}
+					}
+					s = s + 1
+				}
+				/* find any full lines/arcs that are pen 1 that are nested within parts */
+				/* print("Starting scan looking for lines ...");wait(3) */
+				
+				#max_coords=500
+				#coords[max_coords][6]
+				s = 1
+				ctr = 0
+				while(scan(sympatt, "l", s)) {
+					if (( LN0 != "" ) && ( FP0 == 1 ) && ( LT0 == 1 )) {
+						ctr = ctr + 1
+						if ( ctr <= max_coords ) {
+							coords[ctr][1] = S0X
+							coords[ctr][2] = S0Y
+							coords[ctr][3] = E0X
+							coords[ctr][4] = E0Y
+							coords[ctr][5] = C0X
+							coords[ctr][6] = C0Y
+						}
+					}
+					s = s + 1
+				}
+				if ( ctr > max_coords ) {
+					uim_notice("Part lines could not be converted as the coords array is too small!", msg_ok, msg_null, 1)
+				}
+				
+				/* print("Relacing lines ...");wait(3) */
+				while ( ctr > 0 ) {
+					drawline(coords[ctr][1],coords[ctr][2],coords[ctr][3],coords[ctr][4],LT0)
+					ctr = ctr - 1
+				}
+				s = 1
+				ctr = 0
+				/* print("Starting scan looking for arcs ...");wait(3) */
+				while(scan(sympatt, "a", s)) {
+					if (( LN0 != "" ) && ( FP0 == 1 ) && ( LT0 == 1 )) {
+						ctr = ctr + 1
+						
+						
+						/* 16-04-2014
+						coords[ctr][1] = C0X
+						coords[ctr][2] = C0Y
+						*/
+						coords[ctr][1] = C0X/DRS
+						coords[ctr][2] = C0Y/DRS
+						
+					}
+					s = s + 1
+				}
+				/* print("Moving arcs ...");wait(3) */
+				while ( ctr > 0 ) {
+					UX = coords[ctr][1]
+					UY = coords[ctr][2]
+					fmac('a') 
+					fmac('j')
+					fmac(' ')
+					fmac('\\')
+					fmac('\!')
+					ctr = ctr - 1
+				}
+				
+					/* removel step and repeat groups that consist of REAL tools */
+				s = 1
+				while(scan(sympatt, "sx", s)) {
+					if ( (pos(FT0,"TN",1) == 1 ) || ( pos(FT0,"Tn",1) == 1 ) || ( pos(FT0,"tn",1) == 1 ) || ( pos(FT0,"tN",1) == 1 )){
+					/* It starts with a TN but is it a real tool e.g. TNfish would not be a real tool where as TN1 would */
+						if (( val(FT0) > 0 ) && ( SR0 > 1 )) {
+							find ()
+							rfmac('x')
+							s = s - 1
+						}				
+					}
+					s = s + 1
+				}			
+				
+				/* force removal of parts */
+				s = 1
+				while(scan(sympatt, "s", s)) {
+					remove = 0
+					li = 0
+					while ( li < max_parts_to_delete ) {
+						li = li + 1
+						if ( pos(FT0,parts_to_delete[li],1) == 1 ) {
+							remove = 1
+							li = max_parts_to_delete
+						}
+					}
+					if (( remove == 1 ) && ( LN0 == "" )) {
+						/* print(str(s) & ">Trying to remove " & FT0);wait(1) */
+						
+						if ( find () == 1 ) {
+							/* print("Find OK");wait(1) */
+							rfmac('x')
+							s = s - 1
+						} else {
+							print("Find failed " & FT0);wait(2)
+						}
+
+					}
+					s = s + 1
+				}
+				/* print("Starting tidy up ...");wait(3) */
+				/* now tidy up the parts */
+				s = 1
+				while(scan(sympatt, "aelstd", s)) {
+					if(LN0 == "") {
+						remove = 0
+						
+						if ( TF0 == "s") {
+							remove = 1
+							li = 0
+							while ( li < max_parts_to_be_kept ) {
+								li = li + 1
+								if ( pos(FT0,parts_to_be_kept[li],1) == 1 ) {
+									remove = 0
+									li = max_parts_to_be_kept
+								}
+							}
+						}
+						
+			
+						if (( TF0 == "a") || ( TF0 == "l") || ( TF0 == "e")) {
+							remove = 1
+							li = 0
+							while ( li < max_pens_to_be_kept ) {
+								li = li + 1
+								if (( FP0 == pens_to_be_kept[li][pens_to_be_kept_pen] ) && ( LT0 == pens_to_be_kept[li][pens_to_be_kept_linetype] )){
+									remove = 0
+									li = max_pens_to_be_kept
+								}
+							}
+						}
+			
+						if (( TF0 == "t") || ( TF0 == "d")) {
+							
+							if (isEhrtDim(FT0) != 1 ) {		
+								remove = 1
+							} else {
+								remove = 0
+							}
+				
+						}
+			
+						if ( remove == 1 ) {
+							find ()
+							rfmac('x')
+							s = s - 1
+						}
+			
+					}
+					s = s + 1
+				}			
+			
+			} /* End of Filter On branch */
+			
+			/*								
+			s = 1
+			while(scan(sympatt, "td", s)) \
+				{
+				if(LN0 == "") \
+					{
+					find ()
+					rfmac('x')
+
+					s = s - 1
+					}
+
+				s = s + 1
+				}
+				*/
+
+			/* Check geometry				*/
+
+			/* Clean profile geometry			
+			profile_healing(sympatt, sub_ptn, tolerance, realise_ellipses,\
+                           remove_small, close_small_gaps, merge_overlaps, simplify_data)
+		*/
+			/* TRW 15-07-2020 */
+			if (!elf_closed(sympatt, graphics)) {
+
+			
+				tmpstr = "Open Profile : " & sympatt 
+				uim_list_add("ate_partsummary_list", tmpstr, 0)
+
+
+
+			}
+
+			/* TRW testing if(!elf_closed(sympatt, graphics)) { */
+			if ( 1 == 2 ) { /* TRW testing stops the branch */
+				/* Geometry NOT closed */
+			
+				/* 10-03-18 profile_healing(sympatt, sub_ptn, tolerance, realise_ellipses,\
+                           remove_small, close_small_gaps, merge_overlaps, simplify_data) */
+			
+				if(!elf_closed(sympatt, graphics)) {	/* Geometry STILL NOT closed */
+			
+			
+					/* Try and find any nested tooling */
+					find_nested_tooling (sympatt)
+					
+					profile_healing(sympatt, sub_ptn, tolerance, realise_ellipses,\
+                           remove_small, close_small_gaps, merge_overlaps, simplify_data)
+					
+					if(!elf_closed(sympatt, graphics)) {
+						/* no joy */		
+					
+						failedparts = failedparts + 1
+
+						if(failedparts == 1) \
+						{
+							listrow = listrow + 1
+							uim_list_add("ate_partsummary_list", "Open Profile Parts:", listrow)
+							listrow = listrow + 1
+							uim_list_add("ate_partsummary_list", " ", listrow)
+						}
+						/* Add failed Part to array */
+						open_profiles[failedparts][op_short_field] = shortsymname
+						open_profiles[failedparts][op_pathed_field] = pathedsymname
+
+						listrow = listrow + 1
+						uim_list_add("ate_partsummary_list", shortsymname, listrow)
+					}
+				}
+			}
+			
+				
+			
+			
+			
+
+			/* Add part marking text string			*/
+			add_part_marking (sympatt, pathedsymname, shortsymname, \
+				part_parameters[d][pp_matl_field], part_parameters[d][pp_thk_field])
+
+						/* Create new symbol attributes			*/
+			attrs = att_new("sym")
+			att_set_value(attrs, 119, part_parameters[d][pp_matl_field])
+			att_set_value(attrs, 120, part_parameters[d][pp_thk_field])
+			att_set_value(attrs, 121, "mm")
+			att_set_value(attrs, 122, part_parameters[d][pp_orien_field])
+			
+			message="pp_matl_field: " & part_parameters[d][pp_matl_field]
+			write_to_log(1,message)
+			
+			message="pp_thk_field:" & part_parameters[d][pp_thk_field]
+			write_to_log(1,message)
+			
+			/* assumed thickness is in the form 99aa X 99 e.g. 10mm x 70 */
+			
+			$ehrt_width=""
+			/* split_string(part_parameters[d][pp_thk_field]," ",3,&ehrt_width) */
+			split_string(part_parameters[d][pp_matl_field]," ",1,&ehrt_width)
+			
+			message="ehrt_width: " & ehrt_width
+			write_to_log(1,message)
+			/*
+			space_posn=pos(part_parameters[d][pp_matl_field]," ",1)
+			if ( space_posn > 1 ) {
+				ehrt_width = seg(part_parameters[d][pp_matl_field],1,(space_posn-1))	
+			}
+			*/
+			att_set_value(attrs, 674, ehrt_width)
+			
+			
+			
+			/* part_parameters[d2][pp_desc_field] */
+			
+			
+			/* note copper parts also have attrib 109 'comment' populated (see below) */
+			
+
+			message="pathedsymname : " & pathedsymname
+			write_to_log(1,message)
+			
+
+			/* Check for copper part */
+			
+			return_code=pos(part_parameters[d][pp_matl_field],"Cu",1)
+			if ( return_code >= 1 ) {	/* was ( return_code == 1 ) */ 
+				copper_ctr=copper_ctr + 1
+				copper_parts[copper_ctr] = pathedsymname	
+
+				att_set_value(attrs, 109, part_parameters[d][pp_desc_field])
+				
+
+				/* place_mark(sympatt, "TN9002", "TN9003", 120, 60, 1) */
+				/*place_mark(sympatt, 120, 60, 1)*/
+				
+				
+
+				
+				
+			} 
+
+
+
+
+
+						/* Save new symbol				*/
+			retain = 0
+			datum = 1
+			attr_mac_handle = 0
+			save_symbol(sympatt, pathedsymname, retain, datum, attrs)
+
+			att_free(attrs)
+			
+			/* Check for Copper Part 
+			message="Check for copper part. Part material is " & part_parameters[d][pp_matl_field]
+			write_to_log(1,message)
+			 
+			return_code=pos(part_parameters[d][pp_matl_field],"CU",1)
+			if ( return_code == 1 ) {	
+				copper_ctr=copper_ctr + 1
+				copper_parts[copper_ctr] = pathedsymname					
+			} 
+			
+			return_code=pos(part_parameters[d][pp_matl_field],"cu",1)
+			if ( return_code == 1 ) {	
+				copper_ctr=copper_ctr + 1
+				copper_parts[copper_ctr] = pathedsymname					
+			} 	
+			
+			return_code=pos(part_parameters[d][pp_matl_field],"Cu",1)
+			if ( return_code == 1 ) {	
+				copper_ctr=copper_ctr + 1
+				copper_parts[copper_ctr] = pathedsymname					
+			} 	
+			
+			return_code=pos(part_parameters[d][pp_matl_field],"cU",1)
+			if ( return_code == 1 ) {	
+				copper_ctr=copper_ctr + 1
+				copper_parts[copper_ctr] = pathedsymname					
+			} 	
+			
+*/
+
+
+			
+			
+						/* Turn on boundary pattern			*/
+			fmac('\?\p boundarypatt?')
+			fmac('\?v 1?')
+			}
+		}
+
+	fmac('z')
+	
+	/* New EHRT code section */
+	if ( copper_ctr > 0 ) {
+		
+		/* force EHRT device 
+		
+		#machine_ref_num=11
+		won_change_machine(&machine_ref_num)
+		
+		won_change_machine(11)
+		
+		*/
+		
+		won_change_machine(11)
+		
+		
+		/* Check Machine ID is coorect */
+		#cmi = pcc_get_current_mc_id()
+		if ( cmi == 11 ) {
+			message="Machine ID is " & str(cmi)
+		} else {
+			message="Warning Mahine ID is " & str(cmi) & " should be 11"
+			
+		
+			
+			
+		}
+		write_to_log(1,message)
+		
+		message="IS Cu. Check folder : " & ate_save_to_folder
+		write_to_log(1,message)
+		
+		/* $command = "mkdir \"" &  ate_save_to_folder & "\\EHRT\"" */
+		
+		$ehrt_folder = job_dir & "\\EHRT" 
+		$command = "if not exist \"" & ehrt_folder & " mkdir \"" &  ehrt_folder & "\""
+		write_to_log(1,command)
+		rshell(command)	
+		
+		message="EHRT Output Folder : " & ehrt_folder
+		write_to_log(1,message)
+		
+		
+		
+		
+		/*
+		$ehrt_job_folder=ehrt_folder & "\\" & ate_SMnumber & "-" & ate_EnqNumber & "." & ate_PartNumberPrefix 
+		command = "if not exist \"" & ehrt_job_folder & " mkdir \"" &  ehrt_job_folder & "\""
+		write_to_log(1,command)
+		rshell(command)
+		*/
+	
+	}
+
+	i_copper = 1
+	/* ehrt_folder=ate_save_to_folder & "\\EHRT" 
+	message="Job Folder ; " & ehrt_job_folder
+	write_to_log(1,message)*/
+	while ( i_copper <= copper_ctr ) {	
+		msg=""		
+		/* SetOutputFolder(ehrt_folder, &msg) */
+		SetOutputFolder(ehrt_folder, &msg)
+		message="EHRT Set Output : " & msg
+		write_to_log(1,message)
+		
+		convert_single_file(copper_parts[i_copper], &msg)
+		
+		write_to_log(1,copper_parts[i_copper])
+		
+		message="EHRT Convert Single File : " & msg
+		write_to_log(1,message)
+		
+		i_copper = i_copper + 1
+	}
+
+
+	ehrt_folder=job_dir & "\\EHRT"
+	/* new */
+	all_copper_parts=ate_partslist_filename & ".asc"
+	write_to_log(1,all_copper_parts)
+	
+	/* seach for EHRT ascii files */ 
+	num_files=sys_dir_list(ehrt_folder, "*.asc")
+	
+	ehrt_output_file=ehrt_folder & "\\all-" & ate_SMnumber & "-" & ate_EnqNumber & "." & ate_PartNumberPrefix & ".asc"
+	
+	/* missing_tool_file=ehrt_folder & "\\missing-" & ate_SMnumber & "-" & ate_EnqNumber & "." & ate_PartNumberPrefix & ".txt" */
+	
+	write_to_log(1,ehrt_output_file)
+	message = "Total Files : " & str(num_files)
+	write_to_log(1,message)
+	
+	/* delete combined file if it exists */
+	message="Delete " & ehrt_output_file & " if it exissts"
+	write_to_log(1,ehrt_output_file)
+	
+	sys_delete_file(ehrt_output_file)
+
+	
+	missing_tool_ctr=0
+	
+	fp_out = fopen(ehrt_output_file, "w")
+	if (fp_out != 0) {
+		while ( num_files > 0 ) {
+			asc_file=sys_list_entry(num_files-1)
+			asc_file = ehrt_folder & "\\" & asc_file
+			message = "asc_file : " & asc_file
+			write_to_log(1,message)
+			fp_asc=fopen(asc_file, "r")
+			if ( fp_asc != 0 ) {
+				write_to_log(1,"opened file")
+				while(fread(fp_asc, line_in)) {
+					write_to_log(1,line_in)
+					fwrite(fp_out, line_in)
+					/* Check tool reference */
+					char_pos=pos(line_in,"Cut",0)
+					if ( char_pos == 1 ) {
+						local_tool_ref=""
+						split_string(line_in," ",4,&local_tool_ref)
+						write_to_log(1,local_tool_ref)
+						if ( local_tool_ref == "UNKNOWN" ) {
+							split_string(line_in," ",5,&local_tool_ref) /* gets the tool id */
+							missing_tool_ctr = missing_tool_ctr + 1
+							message="local_tool_ref : " & local_tool_ref
+							write_to_log(1,message)
+							ehrt_add_missing_tool(local_tool_ref)
+							
+							
+						}
+						/* Removed as the record length is different if the tool does not exist! 
+						char_pos=pos(local_tool_ref,"@",0)
+						if ( char_pos > 0 ) {
+							missing_tool_ctr = missing_tool_ctr + 1
+							message="local_tool_ref : " & local_tool_ref
+							write_to_log(1,message)
+							
+						}
+						*/
+						
+
+						
+						
+					}
+					
+
+					
+					
+					
+					
+				}
+				fclose(fp_asc)
+			}
+			num_files = num_files - 1
+		}
+	}
+	
+	message="Missing Tool counter : " & str(missing_tool_ctr)
+	write_to_log(1,message)
+
+/* 
+*/	
+	
+	missing_tool_ctr = 0
+
+	if ( missing_tool_ctr > 0 ) {
+		errmsg = "ERROR: Missing Tool Information (see log)"
+		uim_notice(errmsg, msg_ok, msg_null, 1)	
+		#l_ctr=1
+		while ( l_ctr <= max_missing_tools ) {
+			if ( ehrt_missing_tools[l_ctr] != "" ) {
+				message="Missing Tool : " & ehrt_missing_tools[l_ctr]
+				write_to_log(1,message)
+			}
+			l_ctr = l_ctr + 1
+		}		
+	} else {
+		if (fp_out != 0) {
+			while ( num_files > 0 ) {
+				asc_file=sys_list_entry(num_files-1)
+				fp_asc=fopen(asc_file, "r")
+				if ( fp_asc != 0 ) {
+					while(fread(fp_asc, line_in)) {
+						
+						/* write_to_log(1,line_in) */
+						fwrite(fp_out, line_in) 
+					}
+					fclose(fp_asc)
+				}
+				num_files = num_files - 1
+			}
+			fclose(fp_out)
+			
+			listrow = listrow + 1
+			uim_list_add("ate_partsummary_list", "Pushing copper parts to EHRT database ...", listrow)
+			
+			/* push to EHRT database */
+			message="EHRT Data Import. Location : " & ehrt_database_location & "  Output File : " & ehrt_output_file
+			
+			last_ehrt_ascii_file=ehrt_output_file
+			
+			write_to_log(1,message)
+			EhrtAccessDataImport(ehrt_output_file,ehrt_database_location)
+			listrow = listrow + 1
+			uim_list_add("ate_partsummary_list", "Pushing copper parts finished", listrow)
+			
+			
+			write_to_log(1,"EHRT Load complete")	
+			listrow = listrow + 1
+			uim_list_add("ate_partsummary_list", " ", listrow)
+			
+			
+			
+			
+			
+			
+		}	
+	}
+
+	/* List parts with non listed material		*/
+	if(nummarkfails > 0) \
+		{
+		listrow = listrow + 1
+		uim_list_add("ate_partsummary_list", " ", listrow)
+		listrow = listrow + 1
+		uim_list_add("ate_partsummary_list", "Unmarked Parts non-listed material:", listrow)
+		listrow = listrow + 1
+		uim_list_add("ate_partsummary_list", " ", listrow)
+
+		d = 0
+		while(d < nummarkfails) \
+			{
+			d = d + 1
+
+			listrow = listrow + 1
+			uim_list_add("ate_partsummary_list", no_marking[d], listrow)
+			}
+		}
+
+
+
+
+
+						/* Create new partslist file			*/
+	confdoc = xml_open(ate_partslist_template_file)
+	if(!confdoc) \
+		{
+		tmpstr = formats(msg_901, UID)
+		uim_notice(tmpstr, msg_ok, msg_null, 1)
+
+		return
+		}
+
+
+						/* Add attribute 205 to cell B2			*/
+		att_get_dwg_attr(smnumber_attr, &value)
+		xml_element = "/Workbook/Worksheet[1]/Table/Row[2]/Cell[2]/Data"
+		xml_set(confdoc, xml_element, value)
+
+						/* Add attribute 204 to cell C2			*/
+		att_get_dwg_attr(customer_attr, &value)
+		xml_element = "/Workbook/Worksheet[1]/Table/Row[3]/Cell[2]/Data"
+		xml_set(confdoc, xml_element, value)
+
+
+	xmlnumrows = 6
+	sumrowref = numIDpatts + 1
+	
+		/* TRW - param 1 is the number of rows in each array element */
+	sort_part_parameters_array(8)
+	
+	next_partnum = 1
+	d = 0
+	while(d < numIDpatts) \
+		{
+		d = d + 1
+		
+		tmp_str = ""
+		p = 1
+		while ( p < 8 ) \
+			{
+			tmp_str = tmp_str & part_parameters[d][p]
+			p = p + 1
+			}
+			
+		if ( tmp_str != "" ) \
+			{
+			
+		
+			xmlnumrows = xmlnumrows + 1
+
+							/* Update summary list running prompt		*/
+			tmpstr = "Creating partslist entries: " & str(d)
+			uim_list_del("ate_partsummary_list", 0)
+			uim_list_add("ate_partsummary_list", tmpstr, 0)
+			wait(.1)
+
+			init_xml_element = "/Workbook/Worksheet[1]/Table/Row[" & str(xmlnumrows) & "]/Cell["
+
+							/* Add short symbol name			*/
+			shortsymname = part_parameters[d][pp_name_field]
+			get_field(3, ".", shortsymname)
+			if ( next_partnum < val(gf_field_string) ) \
+				{
+				message = "Warning : Part number ending in '" & str(next_partnum) & "' missing"
+				uim_notice(message, msg_ok, msg_null, 1)
+				next_partnum = val(gf_field_string) + 1
+				} \
+				else \
+				{
+					next_partnum = next_partnum + 1
+				}
+			
+			xml_element = init_xml_element & "1]/Data"
+			xml_set(confdoc, xml_element, shortsymname)
+
+			xml_set_property(confdoc, xml_element, "ss:Type", formatting[1][1])
+			xml_element = init_xml_element & "1]"
+			xml_set_property(confdoc, xml_element, "ss:StyleID", formatting[1][2])
+
+							/* Add quantity					*/
+			xml_element = init_xml_element & "2]/Data"
+			get_field(1, " ", part_parameters[d][pp_qty_field])
+			xml_set(confdoc, xml_element, gf_field_string)
+
+			xml_set_property(confdoc, xml_element, "ss:Type", formatting[2][1])
+			xml_element = init_xml_element & "2]"
+			xml_set_property(confdoc, xml_element, "ss:StyleID", formatting[2][2])
+
+							/* Add total quantity				*/
+			xml_element = init_xml_element & "3]/Data"
+			xml_set(confdoc, xml_element, "0")
+
+			xml_set_property(confdoc, xml_element, "ss:Type", formatting[3][1])
+			xml_element = init_xml_element & "3]"
+			xml_set_property(confdoc, xml_element, "ss:StyleID", formatting[3][2])
+			tmpstr = "=SUM(RC[-1] * R4C2)"
+			xml_set_property(confdoc, xml_element, "ss:Formula", tmpstr)
+
+							/* Add total override column			*/
+			xml_element = init_xml_element & "4]/Data"
+			xml_set(confdoc, xml_element, "0")
+
+			xml_set_property(confdoc, xml_element, "ss:Type", formatting[4][1])
+			xml_element = init_xml_element & "4]"
+			xml_set_property(confdoc, xml_element, "ss:StyleID", formatting[4][2])
+
+							/* Add description				*/
+			xml_element = init_xml_element & "5]/Data"
+			xml_set(confdoc, xml_element, part_parameters[d][pp_desc_field])
+
+			xml_set_property(confdoc, xml_element, "ss:Type", formatting[5][1])
+			xml_element = init_xml_element & "5]"
+			xml_set_property(confdoc, xml_element, "ss:StyleID", formatting[5][2])
+
+							/* Add material					*/
+							/* Check for "mm" in material thickness string	*/
+	/*
+			tmpstr = part_parameters[d][pp_thk_field] & "mm" & part_parameters[d][pp_matl_field]
+	*/
+			tmpstr = part_parameters[d][pp_thk_field]
+			if(pos(tmpstr, "m", 1) == 0 && pos(tmpstr, "M", 1) == 0) tmpstr = tmpstr & "mm"
+			tmpstr = tmpstr & part_parameters[d][pp_matl_field]
+			xml_element = init_xml_element & "6]/Data"
+			xml_set(confdoc, xml_element, tmpstr)
+
+			xml_set_property(confdoc, xml_element, "ss:Type", formatting[6][1])
+			xml_element = init_xml_element & "6]"
+			xml_set_property(confdoc, xml_element, "ss:StyleID", formatting[6][2])
+
+							/* Add type					*/
+			xml_element = init_xml_element & "7]/Data"
+			xml_set(confdoc, xml_element, part_parameters[d][pp_type_field])
+
+			xml_set_property(confdoc, xml_element, "ss:Type", formatting[7][1])
+			xml_element = init_xml_element & "7]"
+			xml_set_property(confdoc, xml_element, "ss:StyleID", formatting[7][2])
+
+						/* Add pathed symbol name			*/
+			pathedsymname = ate_save_to_folder & "\\" & part_parameters[d][pp_name_field] & ".sym"
+			xml_element = init_xml_element & "8]/Data"
+			xml_set(confdoc, xml_element, pathedsymname)
+
+			xml_set_property(confdoc, xml_element, "ss:Type", formatting[8][1])
+			xml_element = init_xml_element & "8]"
+			xml_set_property(confdoc, xml_element, "ss:StyleID", formatting[8][2])
+							/* Add hyperlink to radraft symbol		*/
+			xml_element = init_xml_element & "8]"
+			xml_set_property(confdoc, xml_element, "ss:HRef", pathedsymname)
+
+			sumrowref = sumrowref - 1
+			}
+		}
+
+
+/* OUT
+						/* Add blank row				*/
+	xmlnumrows = xmlnumrows + 1
+
+	d = 0
+	while(d < numpartslistcols) \
+		{
+		d = d + 1
+
+		xml_element = "/Workbook/Worksheet[1]/Table/Row[" & str(xmlnumrows) & "]/Cell[" & str(d) & "]/Data"
+		xml_set(confdoc, xml_element, "")
+
+		xml_set_property(confdoc, xml_element, "ss:Type", "String")
+		xml_element = "/Workbook/Worksheet[1]/Table/Row[" & str(xmlnumrows) & "]/Cell[" & str(d) & "]"
+		xml_set_property(confdoc, xml_element, "ss:StyleID", formatting[d][2])
+		}
+
+
+						/* Add Multiplier row entries			*/
+	xmlnumrows = xmlnumrows + 1
+
+	xml_element = "/Workbook/Worksheet[1]/Table/Row[" & str(xmlnumrows) & "]/Cell[1]/Data"
+	xml_set(confdoc, xml_element, "Multiplier")
+
+	xml_set_property(confdoc, xml_element, "ss:Type", formatting[1][1])
+	xml_element = "/Workbook/Worksheet[1]/Table/Row[" & str(xmlnumrows) & "]/Cell[1]"
+	xml_set_property(confdoc, xml_element, "ss:StyleID", formatting[1][2])
+
+	xml_element = "/Workbook/Worksheet[1]/Table/Row[" & str(xmlnumrows) & "]/Cell[2]/Data"
+	xml_set(confdoc, xml_element, "1")
+
+	xml_set_property(confdoc, xml_element, "ss:Type", formatting[2][1])
+	xml_element = "/Workbook/Worksheet[1]/Table/Row[" & str(xmlnumrows) & "]/Cell[2]"
+	xml_set_property(confdoc, xml_element, "ss:StyleID", formatting[2][2])
+
+	d = 2
+	while(d < numpartslistcols) \
+		{
+		d = d + 1
+
+		xml_element = "/Workbook/Worksheet[1]/Table/Row[" & str(xmlnumrows) & "]/Cell[" & str(d) & "]/Data"
+		xml_set(confdoc, xml_element, "")
+
+		xml_set_property(confdoc, xml_element, "ss:Type", "String")
+		xml_element = "/Workbook/Worksheet[1]/Table/Row[" & str(xmlnumrows) & "]/Cell[" & str(d) & "]"
+		xml_set_property(confdoc, xml_element, "ss:StyleID", formatting[d][2])
+		}
+
+ OUT */
+
+
+						/* Add blank rows				*/
+	r = 3
+	while(r > 0) \
+		{
+		xmlnumrows = xmlnumrows + 1
+
+		d = 0
+		while(d < numpartslistcols) \
+			{
+			d = d + 1
+
+			xml_element = "/Workbook/Worksheet[1]/Table/Row[" & str(xmlnumrows) & "]"
+			xml_set(confdoc, xml_element, "")
+			}
+
+		r = r - 1
+		}
+
+						/* Add Table headers				*/
+	xmlnumrows = xmlnumrows + 1
+
+
+
+	d = 0
+	while(d < numprogtablecols) \
+		{
+		d = d + 1
+
+		xml_element = "/Workbook/Worksheet[1]/Table/Row[" & str(xmlnumrows) & "]/Cell[" & str(d) & "]/Data"
+		xml_set(confdoc, xml_element, progtableheader[d])
+
+		xml_set_property(confdoc, xml_element, "ss:Type", "String")
+		xml_element = "/Workbook/Worksheet[1]/Table/Row[" & str(xmlnumrows) & "]/Cell[" & str(d) & "]"
+		xml_set_property(confdoc, xml_element, "ss:StyleID", progtableformattingstyle)
+		}
+
+						/* Add empty table rows				*/
+	r = 16
+	while(r > 0) \
+		{
+		xmlnumrows = xmlnumrows + 1
+
+		d = 0
+		while(d < numprogtablecols) \
+			{
+			d = d + 1
+
+			xml_element = "/Workbook/Worksheet[1]/Table/Row[" & str(xmlnumrows) & "]/Cell[" & str(d) & "]/Data"
+			xml_set(confdoc, xml_element, "")
+
+			xml_set_property(confdoc, xml_element, "ss:Type", "String")
+			xml_element = "/Workbook/Worksheet[1]/Table/Row[" & str(xmlnumrows) & "]/Cell[" & str(d) & "]"
+			xml_set_property(confdoc, xml_element, "ss:StyleID", formatting[d][2])
+			}
+
+		r = r - 1
+		}
+
+
+						/* Update Expanded Row Count			*/
+	xml_element = "Workbook/Worksheet/Table[1]"
+	xml_set_property(confdoc, xml_element, "ss:ExpandedRowCount", str(xmlnumrows))
+
+						/* Save file					*/
+	xml_save(confdoc, ate_pathed_partslist_file)
+	xml_close(confdoc)
+	
+	/* copper reporting added */
+	missing_cu_tools = ehrt_get_missing_tool_count()		
+	failedparts = failedparts + missing_cu_tools
+	
+
+						/* Update summary list running prompt		*/
+	tmpstr = "Process complete (" & str(numIDpatts) & " parts processed with " & str(failedparts) & " errors)"
+	if(failedparts == 1) tmpstr = "Process complete (" & str(numIDpatts) & " parts processed with " & str(failedparts) & " error)"
+	uim_list_del("ate_partsummary_list", 0)
+	uim_list_add("ate_partsummary_list", tmpstr, 0)
+	
+
+	
+	if ( missing_cu_tools > 0 ) {
+		cu_message = str(missing_cu_tools) & " Copper Tool placesments missing" 
+		uim_list_add("ate_partsummary_list", cu_message, 1)
+		i=1
+		while ( i <= missing_cu_tools ) {
+			ehrt_missing_tools[i]
+			uim_list_add("ate_partsummary_list", ehrt_missing_tools[i], (i + 1))
+			i = i + 1
+		}
+		
+	}
+/*	*/
+	
+	/* TRW - June 2020 */
+	make_pattern_visable("Bend Down Centerline")
+	make_pattern_visable("Bend Up Centerline")
+	make_pattern_visable("Dimension")
+	make_pattern_visable("Datum Symbol")
+	
+	
+	}
+
+
+
+proc highlight_duplicate_parts ($duplicatename) \
+	{
+	#n
+	#i
+
+	#idnumber
+
+	$duplicatepatt
+
+	n = 0
+	while(n < numIDpatts) \
+		{
+		n = n + 1
+
+/*
+print(n, ": ", part_parameters[n][pp_name_field], " == ", duplicatename)
+gin(0)
+print("")
+*/
+
+		if(part_parameters[n][pp_name_field] == duplicatename) \
+			{
+			idnumber = val(part_parameters[n][pp_idnum_field])
+
+			i = 0
+			while(i < numIDpatts) \
+				{
+				i = i + 1
+
+				if(idnumber == val(id_patts[i][id_idnum_field])) \
+					{
+					duplicatepatt = id_patts[i][id_pattname_field]
+
+					i = numIDpatts
+					}
+				}
+
+/*
+print("Duplicate patt: ", id_patts[n][id_pattname_field])
+gin(0)
+print("")
+*/
+
+			scan(duplicatepatt, "Hh", 1)
+			find()
+
+			rfmac('e')
+			rfmac('\?P 2?')
+			}
+		}
+	}
+
+
+proc add_part_marking ($pattern, $pathedfilename, $markstr,  $markmatl, $markthk) \
+	{
+		/*
+	message = "add_part_marking called for symbol " & pathedfilename
+	write_to_log(1,message)
+		*/
+	#n
+	#checkx
+	#checky
+	
+	#graphics = 0
+
+	$addmark
+
+
+	addmark = "null"
+	n = 0
+	while(n < nummatls) \
+		{
+		n = n + 1
+
+		if(markmatl == material_lookups[n][mlu_type_field] && \
+			val(markthk) == val(material_lookups[n][mlu_thk_field])) \
+			{
+			addmark = material_lookups[n][mlu_mark_field]
+
+			n = nummatls
+			}
+		}
+
+	if(addmark == "null") \
+		{
+		nummarkfails = nummarkfails + 1
+		no_marking[nummarkfails] = pathedfilename
+		return
+		}
+
+	if(addmark == "yes") \
+		{
+		
+		
+		
+							/* Determine part blh x & y coords		*/
+		#minx;#miny;#maxx;#maxy
+		pattern_bounds(pattern, "al", &minx, &miny, &maxx, &maxy)
+
+		pnt(minx,miny)
+		fmac('s')
+
+						/* Check position of part marking string		*/
+		if(elf_closed(pattern, graphics)) \
+			{
+			mac('\?3 0, markoffsety?')
+			fmac('\!')
+			checky = P1Y
+			checkx = minx
+			
+			/* TRW - Changed code to ensure text is placed on the part */
+			#found_suitable_point = 0 
+			
+			while(checkx < maxx) \
+				{
+				if(elf_point_in_shape(pattern, checkx, checky)) \
+					{
+					
+					found_suitable_point = 1
+					minx = checkx
+
+					pnt(minx,miny)
+					fmac('s')
+
+					checkx = maxx
+					}
+
+				checkx = checkx + 1
+				}
+			}
+			if ( found_suitable_point == 0 ) {
+				/* Could not find suitable point on part so look for nearest point in the shape */
+				
+				#nx
+				#ny
+				#dist
+				elf_nearest_point_on_edge(pattern, minx, P1Y, &nx, &ny, &dist)
+				/*  */				
+				pnt(nx,ny)
+				fmac('s')
+			} 
+
+		fmac('\?T markstr?')
+
+		fmac('\?3 markoffsetx, markoffsety?')
+		fmac(' ')
+		fmac('e')
+		fmac('\?- marktexthght * DRS?')
+		fmac('e')
+		fmac('\?= marktextfont?')
+		fmac('e')
+		fmac('\?P marktextpen?')
+		fmac('e')
+		fmac(')')
+		fmac('\!')
+		}
+	}
+
+proc ate_schedule_file_browse_notifier () \
+	{
+					/* Opens a browser window to allow		*/
+					/* selection of a specified  file type		*/
+	load_dialog = macfilesel_new()
+
+	macfilesel_set_title(load_dialog, title_msg)
+	macfilesel_set_filter(load_dialog, filter_msg, file_types)
+
+	macfilesel_set_filename(load_dialog, ate_partslist_browse_folder)
+
+	macfilesel_set_notify_handler(load_dialog, "exec ate_browsed()")
+
+	macfilesel_load(load_dialog)
+	}
+
+
+proc ate_browsed () \
+	{
+	write_to_log(1,"ate_browsed ()")
+					/* Get browsed partslist file name			*/
+	macfilesel_get_filename(load_dialog, &strFilename)
+	macfilesel_delete(load_dialog)
+
+	uim_set("ate_schedulepart_filename",strFilename)
+	}
+
+
+proc ate_schedule_parts_notifier () \
+	{
+	$tmpstr
+	$xml_element
+	$init_xml_element
+
+	#confdoc
+	#xmlnumrows
+	#numparts
+	#scheduledparts
+
+	#tmpval
+	#n
+
+	#attrs
+
+	write_to_log(1,"ate_schedule_parts_notifier")
+
+						/* Check FIT or FAB is selected				*/
+	uim_get("ate_schedule_fit_tick_box")
+	uim_get("ate_schedule_fab_tick_box")
+	if(ate_schedule_fit_tick_box == 0 && ate_schedule_fab_tick_box == 0) \
+		{
+		uim_notice(msg_4000, msg_ok, msg_null, 1)
+		return
+		}
+
+						/* Check clear schedule option				*/
+	uim_get("ate_clear_schedule_tick_box")
+	if(ate_clear_schedule_tick_box) \
+		{
+						/* Show WARNING with option to procced/cancel		*/
+		if(uim_notice(msg_4001, msg_cont, msg_cancel, 1) == 2) return
+
+		nst_delete_all_parts ()
+		}
+
+						/* Read exising GUI lookup file				*/
+	uim_get("ate_schedulepart_filename")
+
+	confdoc = xml_open(ate_schedulepart_filename)
+	if(!confdoc) \
+		{
+		tmpstr = formats(msg_4002, ate_schedulepart_filename)
+		uim_notice(tmpstr, msg_ok, msg_null, 1)
+
+		return
+		}
+
+
+						/* Retrieve part details from partslist xml file	*/
+	xml_element = "/Workbook/Worksheet[1]/Table"
+	xmlnumrows = xml_count_elements(confdoc, xml_element, "Row")
+
+
+/* out
+	partmultiplier = -1
+	numparts = 0
+	n = 1	/* set to 1 to skip header row in xml file	*/
+	while(n < xmlnumrows) \
+		{
+		n = n + 1
+
+		init_xml_element = "/Workbook/Worksheet[1]/Table/Row[" & str(n) & "]/Cell["
+
+		c = 0
+		while(c < numpartslistcols) \
+			{
+			c = c + 1
+
+			xml_element = init_xml_element & str(c) & "]/Data"
+			xml_get(confdoc, xml_element, &content)
+
+						/* Stop read if "Multiplier" cell found			*/
+			if(content == "Multiplier") \
+				{
+				xml_element = init_xml_element & "2]/Data"
+				xml_get(confdoc, xml_element, &content)
+
+				partmultiplier = val(content)
+
+				c = 5
+				n = xmlnumrows
+				} \
+			else if(content != "") \
+				{
+				if(c == 1) numparts = numparts + 1
+ 
+				partslist_data[numparts][c] = content
+				}
+			}
+		}
+ out */
+
+						/* Get part multiplier value					*/
+	xml_element = "/Workbook/Worksheet[1]/Table/Row[4]/Cell[2]/Data"
+	xml_get(confdoc, xml_element, &content)
+
+	partmultiplier = val(content)
+
+
+						/* Read part data from parts list				*/
+	numparts = 0
+	n = 6	/* set to 6 to skip headers in xml file	*/
+	while(n < xmlnumrows) \
+		{
+		n = n + 1
+
+		init_xml_element = "/Workbook/Worksheet[1]/Table/Row[" & str(n) & "]/Cell["
+
+		c = 0
+		while(c < numpartslistcols) \
+			{
+			c = c + 1
+
+			xml_element = init_xml_element & str(c) & "]/Data"
+			xml_get(confdoc, xml_element, &content)
+
+						/* Stop read if "PROGRAM NUMBER" cell found			*/
+			if(content == "PROGRAM NUMBER") \
+				{
+				c = numpartslistcols
+				n = xmlnumrows
+				} \
+			else if(content != "") \
+				{
+				if(c == 1) numparts = numparts + 1
+ 
+				partslist_data[numparts][c] = content
+				}
+			}
+		}
+
+
+	xml_close(confdoc)
+
+	if(partmultiplier < 1) \
+		{
+		tmpstr = formats(msg_4003, ate_schedulepart_filename)
+		if(partmultiplier == 0) tmpstr = formats(msg_4004, ate_schedulepart_filename)
+		uim_notice(tmpstr, msg_ok, msg_null, 1)
+		return
+		}
+
+						/* Load parts into Radan nest schedule			*/
+	scheduledparts = 0
+	n = 0
+	while(n < numparts) \
+		{
+		n = n + 1
+
+		addpart = 0
+		if(partslist_data[n][pd_type_field] == "FIT") addpart = ate_schedule_fit_tick_box
+		if(partslist_data[n][pd_type_field] == "FAB") addpart = ate_schedule_fab_tick_box
+
+		if(addpart) \
+			{
+			scheduledparts = scheduledparts + 1
+
+			NST_NAME = partslist_data[n][pd_name_field]
+
+			NST_KIT = "-"
+
+			NST_NUMBER = val(partslist_data[n][pd_qty_field]) * partmultiplier
+			tmpval = val(partslist_data[n][pd_total_override_field])
+			if(tmpval > 0) NST_NUMBER = tmpval
+		
+   			NST_EXTRA = 0
+
+			get_field(3, "m", partslist_data[n][pd_matl_field])
+			NST_MATERIAL = gf_field_string
+
+			get_field(1, "m", partslist_data[n][pd_matl_field])
+			NST_THICKNESS = val(gf_field_string)
+
+			NST_THICK_UNITS = "mm"
+
+							/* Get symbol nest orientation attribute	*/
+			attrs = att_load(NST_NAME, 1)
+			att_get_value(attrs, 122, &content)
+			att_free(attrs)
+
+			NST_ORIENT = val(content)
+
+   			NST_PRIORITY = atepriority
+
+   			NST_BIN = 0
+   			NST_MIRROR = 0
+
+			nst_add_part ()
+			}
+		}
+
+						/* Display final message				*/
+	tmpstr = formats(msg_4006, str(numparts))
+	if(numparts == 1) tmpstr = formats(msg_4005, str(numparts))
+	if(scheduledparts == 1) \
+		{
+		tmpstr = tmpstr & " " & formats(msg_4007, str(scheduledparts))
+		} \
+	else tmpstr = tmpstr & " " & formats(msg_4008, str(scheduledparts))
+	uim_notice(tmpstr, msg_ok, msg_null, 1)
+	}
+
+
+
+proc get_partslist_SM_number_notifier () \
+	{
+	$path[20]	/* stores directory path */
+		
+		
+	$tmpstr
+	$jobref
+	$part1
+	$part2
+
+					/* Force boundary visibility "ON"	*/
+	fmac('\?\p identified_patt?')
+	fmac('\?v 1?')
+	fmac('z')
+
+	if(!scan(identified_patt, "ip", 2)) \
+		{
+		uim_notice(msg_1005, msg_ok, msg_null, 1)
+		return
+		}
+
+
+							/* Scan for part data text string		*/
+	scan(identified_text_patt, "t", 0)
+	while(next()) \
+		{
+		if(LN0 == "" && MK0 > 0) \
+			{
+							/* Get SM Number prefix				*/
+			/* Get 2nd field delimited by \			*/
+			get_field(2, "\\", FT0)
+			
+			/* uim_notice(DIR,"OK","Cancel",1)  removed 30-11-23 */
+			/* uim_notice(gf_field_string,"OK","Cancel",1) */
+			
+			
+			
+			/* Get 1st field delimited by -			*/
+			get_field(1, "-", gf_field_string)
+			
+			
+			/* new 10-03-18 */
+			jobref = gf_field_string
+			get_field(1, ".", jobref)
+			part1 = gf_field_string
+			get_field(2, ".", jobref)
+			part2 = gf_field_string
+			
+			ate_partslist_filename = seg(part1,2,-len(part1)) & " S" & part2
+			ate_partslist_filename = part1 & " " 
+			
+			/* get_field(2, ".", gf_field_string) 
+			ate_partslist_filename = gf_field_string & tmpstr  
+			*/
+			
+			
+			/* 10-03-18 ate_partslist_filename = seg(gf_field_string, 2, -len(gf_field_string)) */
+
+			ate_partslist_filename = ate_partslist_filename & ate_partslist_suffix
+			}
+		}
+
+	uim_show("ate_partslist_filename")
+	}
+
+/* ---------------------------------------------------- */
+/* Procedure: recall_to_part_editor			*/
+/*							*/
+/* Description:						*/
+/* Checks Opens selected part in part editor		*/
+/* ---------------------------------------------------- */
+proc send_to_parteditor () \
+	{
+	#i
+	#f
+	#tmpval
+	#numrows
+	#selectedrow
+
+	$tmpstr
+	$listpart
+
+	#discard_changes = 1
+	$options = ""
+
+
+	numrows = uim_list_num("ate_partsummary_list")
+
+	tmpstr = ""
+	listpart = ""
+	i = 0
+	while(i < numrows) \
+		{
+		i = i + 1
+
+		if(uim_list_selected("ate_partsummary_list", i) > 0) \
+			{
+			listpart = uim_list_contents("ate_partsummary_list", i)
+
+			selectedrow = i
+			}
+		}
+
+	if(listpart != "") \
+		{
+		i = 0
+		while(i < failedparts) \
+			{
+			i = i + 1
+
+			if(listpart == open_profiles[i][op_short_field]) \
+				{
+				listpart = open_profiles[i][op_pathed_field]
+				i = failedparts
+				}
+			}
+
+
+		if(app_open_symbol(listpart, discard_changes, options)) \
+			{
+			wait(.5)
+			uim_list_set_colour("ate_partsummary_list", selectedrow, green)
+			}
+		}
+	}
+
+
+proc collect_part_parameters_data () \
+	{
+	$tmpstr
+
+	#tmpval
+	#fmark
+	#n
+
+
+					/* Scan for part nest data symbols		*/
+	n = 1
+	/* TRW - Added counter (ctr) to index the part_parameters array. The array was index by n
+	* but there was suitations where fmark equalled zero at the start of the scan with resulted
+	* in the indexing been out */
+	#ctr = 0
+	while(scan(identified_text_patt, "s", n)) \
+		{
+		fmark = MK0
+
+		if(fmark > 0) \
+			{
+			ctr = ctr + 1
+			
+					/* Retrieve nest orientation data		*/
+			tmpval = val(FT0)
+			if(tmpval > 3) tmpval = tmpval + 1
+			part_parameters[ctr][pp_orien_field] = str(tmpval)
+			part_parameters[ctr][pp_idnum_field] = str(fmark)
+
+			
+			
+			
+					/* Scan for part data text string		*/
+			scan(identified_text_patt, "t", 0)
+			while(next()) \
+				{
+				
+				if(MK0 == fmark && LN0 == "") \
+					{
+					
+						
+							/* Get SM Number prefix				*/
+							/* Get 2nd field delimited by \			*/
+					get_field(2, "\\", FT0)
+					
+					
+							/* Remove 1st character (j)			*/
+					part_parameters[ctr][pp_name_field] = seg(gf_field_string, 2, -len(gf_field_string))
+
+
+							/* Get Material Type				*/
+							/* Get 3rd field delimited by \			*/
+					get_field(3, "\\", FT0)
+							/* Get 2nd field delimited by ,			*/
+					get_field(2, ",", gf_field_string)
+							/* Remove 1st character (space)			*/
+					part_parameters[ctr][pp_matl_field] = seg(gf_field_string, 2, -len(gf_field_string))
+
+
+							/* Get Thickness				*/
+							/* Get 3rd field delimited by \			*/
+					get_field(3, "\\", FT0)
+							/* Get 1st field delimited by ,			*/
+					get_field(1, ",", gf_field_string)
+					part_parameters[ctr][pp_thk_field] = seg(gf_field_string, 2, -len(gf_field_string))
+
+
+							/* Get Quantity					*/
+							/* Get 4th field delimited by \			*/
+					get_field(4, "\\", FT0)
+					part_parameters[ctr][pp_qty_field] = seg(gf_field_string, 2, -len(gf_field_string))
+
+							/* Get Description				*/
+							/* Get 5th field delimited by \			*/
+					get_field(5, "\\", FT0)
+					part_parameters[ctr][pp_desc_field] = seg(gf_field_string, 2, -len(gf_field_string))
+
+
+
+							/* Get Part Type				*/
+							/* Get 6th field delimited by \			*/
+					get_field(6, "\\", FT0)
+					part_parameters[ctr][pp_type_field] = seg(gf_field_string, 2, -len(gf_field_string))
+					}
+					
+				
+			
+					
+				}
+				
+				
+			}
+
+		n = n + 1 
+		}
+			
+	}
+
+/********************************************************************************/
+
+proc edit_feature_props ($linetype, #pen) \
+	{
+	fmac('e\?, linetype?')
+	fmac('e\?P pen?')
+	}
+
+proc open_pattern ($pattname) \
+	{
+	if(!mac('\?\p pattname?o')) mac('\?\p pattname, "y"?')
+	}
+
+/*------------------------------------------------------------------------------*/
+/*	Resizes Radraft drawing							*/
+/*	Modifies current drawing paper size to suit component size + 400mm	*/
+/*	and centres component							*/
+/*										*/
+/*------------------------------------------------------------------------------*/
+proc resize_drawing_canvas () \
+	{
+			/* Resize paper relative to component size	*/
+	#minx;#miny;#maxx;#maxy
+	pattern_bounds(COP, "alt", &minx, &miny, &maxx, &maxy)
+
+	papersizex = ((maxx - minx) * 1.5) * DRS
+	papersizey = ((maxy - miny) * 1.5) * DRS
+
+	newpapersize = str(papersizex) & "x" & str(papersizey)
+	mac('\?\n "p", newpapersize?')
+
+
+
+			/* Centre component in drawing			*/
+	#minx2;#miny2;#maxx2;#maxy2
+	pattern_bounds(COP, "alt", &minx2, &miny2, &maxx2, &maxy2)
+
+	#don = DON
+	#ctrx = minx2 + ((maxx2 - minx2) / 2)
+	#ctry = miny2 + ((maxy2 - miny2) / 2)
+	pnt(ctrx,ctry)
+	fmac('s')
+	if(!DON) fmac('D')
+	pctrx = PSX / 2
+	pctry = PSY / 2
+	pnt(pctrx,pctry)
+	fmac('s')
+	fmac('\?\P "/"?')
+	fmac('m')
+	if(!DON) fmac('D')
+	}
+
+func esc_find_feature_old($imask)\
+	{
+	$id; #x, #y
+	$mask = latch_feature_mask(imask)
+	#prf_prv_ltch_nabl = preview_latch_enable(1)
+	$point_mask = latch_mask("pbifc")
+	ret = get_loc()
+
+	if(ret!=27) \
+		{
+		if (get_latched(1, &id, &x, &y) == LATCH_FEATURE)\
+			{
+					/* Find the latched feature,		*/
+					/* preserving UX & UY since		*/
+					/* the find changes them to the		*/
+					/* found point.				*/
+			x = UX; y = UY
+			find_xy_identifier(id, UX, UY)
+			}
+		}
+	preview_latch_enable(prf_prv_ltch_nabl)
+	latch_feature_mask(mask)
+	latch_mask(point_mask)
+	return(ret)
+	}
+
+
+proc get_field () \
+	{
+	gf_field = #1
+	gf_delim = $2
+	gf_string = $3
+
+	gf_len_string = len(gf_string)
+	gf_field_string = ""
+
+	gf_count = 1
+	gf_next_char_count = 1
+	while(gf_count <= gf_field && gf_next_char_count <= gf_len_string) \
+		{
+		gf_next_char = seg(gf_string,gf_next_char_count,1)
+		if(gf_next_char != gf_delim) \
+			{
+			if(gf_count == gf_field) \
+				gf_field_string = gf_field_string & gf_next_char
+			} \
+		else gf_count = gf_count + 1
+
+		gf_next_char_count = gf_next_char_count + 1
+		}
+	}
+
+proc command_running ($imagename) \
+	{
+	uim_set("ate_command_live_image", imagename)
+	uim_show("ate_command_live_image")
+	}
+
+	/* TRW - procedure that sorts the part_parameter array */ 
+proc sort_part_parameters_array(#num_fields) \
+	{
+	
+	$temp_array[num_fields] 
+	
+	i = 0
+	while(i < numIDpatts) \
+		{
+		i = i + 1
+		n = 0
+		while ( n < (numIDpatts-1) ) \
+			{
+			n = n + 1
+			if ( part_parameters[n][pp_name_field] > part_parameters[(n+1)][pp_name_field] ) \
+				{
+					
+				
+					/* copy the first element into the temp array */
+					m = 0
+					while ( m < num_fields ) \
+						{
+							m = m + 1
+							temp_array[m] = part_parameters[n][m]
+						}
+
+					/* copy the second element into position of the first element */
+					m = 0
+					while ( m < num_fields ) \
+						{
+							m = m + 1
+							part_parameters[n][m] = part_parameters[(n+1)][m]
+						}
+						
+					/* copy the temp element into position of the second element */
+					m = 0
+					while ( m < num_fields ) \
+						{
+							m = m + 1
+							part_parameters[(n+1)][m] = temp_array[m]
+						}
+					
+					
+				}
+			}
+		}
+	}
+	
+	/* TRW Debuging aid */
+	proc debug($string) {
+		if ( debug_on == 1 ) uim_notice(string,"OK","Cancel",1)
+	
+	
+	}
+
+func eq() \
+	{
+	if ( abs(#1 - #2)  <=  #2 * 10**-4 ) return(1)
+	return(0)
+	}
+
+/* TRW - Added as part of filtering option */
+
+proc load_filter_rules() {
+	open(filter_file,"r")
+	while(read(nextline)) {
+		get_fields(nextline)
+		if ( fields[1] == "PART" ) {
+			parts_to_be_kept_ctr = parts_to_be_kept_ctr + 1
+			parts_to_be_kept[parts_to_be_kept_ctr] = fields[2]
+		}
+		if ( fields[1] == "PEN" ) {
+			pens_to_be_kept_ctr = pens_to_be_kept_ctr + 1
+			pens_to_be_kept[pens_to_be_kept_ctr][pens_to_be_kept_pen] = val(fields[2])
+			pens_to_be_kept[pens_to_be_kept_ctr][pens_to_be_kept_linetype] = val(fields[3])
+			
+		}
+		
+		if ( fields[1] == "FORCE_DELETE" ) {
+			parts_to_delete_ctr = parts_to_delete_ctr + 1
+			parts_to_delete[parts_to_delete_ctr]  = fields[2]
+		
+		}
+	}
+	close()
+}
+
+proc clear_fields() {
+	li = 0;
+	while ( li < max_fields ) {
+		li = li + 1
+		fields[li] = ""
+	}
+
+}
+
+proc get_fields($data) {
+	clear_fields()
+	li = 0
+	posn = pos(data,",",1)
+	while ( posn > 0 ) {
+		li = li + 1
+		fields[li] = seg(data,1,posn-1)
+		data = seg(data,posn+1,len(data)-posn+1)
+		posn = pos(data,",",1)
+	}
+	li = li + 1
+	if ( len(data) > 0 ) {
+		fields[li] = data
+	} else {
+		fields[li] = ""
+	}
+
+}
+
+proc drawline(#x1a,#y1a,#x2a,#y2a,#pennum) {
+	linetype = "F"
+	pnt(x1a,y1a)
+	fmac('s')
+	pnt(x2a,y2a)
+	fmac('d')
+	fmac('e\?, linetype?')
+	fmac('e\?P pennum?')
+}
+
+/* TRW Added - June 2020 */
+	
+proc make_pattern_invisable($pattern_name) {
+	fmac('\?\p pattern_name?')
+	fmac('\?v 0?')	 
+}
+
+/* TRW Added - June 2020 */
+proc make_pattern_visable($pattern_name) {
+	fmac('\?\p pattern_name?')
+	fmac('\?v 1?')
+}
+
+load_filter_rules()
+
+proc F1() {
+	
+	load_partprep_gui()
+}
+
+proc F2() {
+	load_createpart_gui ()
+}
+
+proc F10() {
+	set_gui_state(2)
+	set_gui_substate(2,5)
+}
+
+F12H = "Reload"
+proc F12()\
+    {
+    load_pop(this)
+    }
